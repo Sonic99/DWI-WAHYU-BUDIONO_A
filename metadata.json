@@ -1,0 +1,6 @@
+{
+  "name": "SIP-TU SMAN 9 Surabaya",
+  "description": "Sistem Informasi Tata Usaha & Pengelolaan Persuratan SMAN 9 Surabaya - Agenda Surat Masuk, Surat Keluar, Disposisi Kedinasan, Cetak Agenda & Lembar Disposisi, Backup Lokal & Email, serta Manajemen Hak Akses Terintegrasi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
