@@ -62,6 +62,11 @@
     page-break-inside: avoid;
   }
 
+  .print-page-break {
+    break-after: page;
+    page-break-after: always;
+  }
+
   table {
     page-break-inside: auto;
   }

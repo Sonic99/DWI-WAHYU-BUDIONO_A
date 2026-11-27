@@ -15,7 +15,9 @@ import {
   Upload,
   X,
   AlertCircle,
-  BookOpen
+  BookOpen,
+  Loader2,
+  Sparkles
 } from 'lucide-react';
 import {
   Guru,
@@ -54,6 +56,8 @@ import {
   ActiveEvidenceSelection,
   SkpEvidenceReaderPanel
 } from './SkpEvidenceReaderPanel';
+import { SkpAiAssistModal, SkpAiMode } from './SkpAiAssistModal';
+import { SkpCoverSheet } from './SkpCoverSheet';
 
 interface SkpPegawaiViewProps {
   profile: SchoolProfile;
@@ -156,6 +160,17 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
 
   // Print options
   const [tampilkanTtdStempel, setTampilkanTtdStempel] = useState(true);
+  const [printSectionMode, setPrintSectionMode] = useState<
+    'cover_dan_isi' | 'cover_saja' | 'isi_saja'
+  >('cover_dan_isi');
+
+  // AI Assistant state
+  const [aiAssistModal, setAiAssistModal] = useState<{
+    open: boolean;
+    mode: SkpAiMode;
+  }>({ open: false, mode: 'generate_rhk' });
+  const [isInlineAiRhkLoading, setIsInlineAiRhkLoading] = useState(false);
+  const [isInlineAiBuktiLoading, setIsInlineAiBuktiLoading] = useState(false);
 
   const canEdit = ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'].includes(
     currentUser.role
@@ -747,6 +762,132 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
     });
   };
 
+  // Inline AI helper inside Tambah/Edit RHK Modal
+  const handleInlineAiRhkAssist = async () => {
+    if (!rhkModal || !activeSkp) return;
+    setIsInlineAiRhkLoading(true);
+    try {
+      const response = await fetch('/api/ai/skp-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'generate_rhk',
+          pegawaiNama: activeSkp.pegawaiNama,
+          pegawaiJabatan: activeSkp.pegawaiJabatan,
+          pegawaiPangkatGol: activeSkp.pegawaiPangkatGol,
+          pegawaiRoleType: activeSkp.pegawaiSourceType,
+          tahun: activeSkp.tahun,
+          jenisRhk: rhkModal.jenis,
+          deskripsiTugas:
+            rhkModal.rencanaHasilKerja.trim() ||
+            rhkModal.rhkAtasan.trim() ||
+            `Tugas ${rhkModal.jenis.toLowerCase()} ${activeSkp.pegawaiJabatan}`
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success || !data?.result) {
+        throw new Error(data?.message || 'Gagal merumuskan RHK dengan AI.');
+      }
+      const res = data.result;
+      const now = Date.now();
+      const mappedIndikators: SkpIndikatorKinerja[] = Array.isArray(res.indikatorList)
+        ? res.indikatorList.map((ind: any, idx: number) => ({
+            id: `ind-${now}-${idx}`,
+            aspek:
+              ind.aspek === 'Kualitas' || ind.aspek === 'Waktu' || ind.aspek === 'Biaya'
+                ? ind.aspek
+                : 'Kuantitas',
+            indikator: ind.indikator || '',
+            target: ind.target || '100%',
+            realisasi: ind.realisasi || '100%',
+            capaianPersen: Number(ind.capaianPersen) || 100
+          }))
+        : rhkModal.indikatorList;
+
+      setRhkModal(prev =>
+        prev
+          ? {
+              ...prev,
+              rhkAtasan: res.rhkAtasan || prev.rhkAtasan,
+              rencanaHasilKerja: res.rencanaHasilKerja || prev.rencanaHasilKerja,
+              periodeLabel: res.periodeLabel || prev.periodeLabel,
+              indikatorList: mappedIndikators,
+              error: ''
+            }
+          : prev
+      );
+    } catch (err: any) {
+      setRhkModal(prev =>
+        prev
+          ? { ...prev, error: err?.message || 'Gagal menghubungi Asisten AI.' }
+          : prev
+      );
+    } finally {
+      setIsInlineAiRhkLoading(false);
+    }
+  };
+
+  // Inline AI helper inside Upload/Tambah Bukti Dukung Modal
+  const handleInlineAiBuktiAssist = async () => {
+    if (!buktiModal || !activeSkp) return;
+    setIsInlineAiBuktiLoading(true);
+    try {
+      const targetRhk = activeSkp.rhkList.find(r => r.id === buktiModal.rhkId);
+      const response = await fetch('/api/ai/skp-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'draft_bukti',
+          pegawaiNama: activeSkp.pegawaiNama,
+          pegawaiJabatan: activeSkp.pegawaiJabatan,
+          pegawaiPangkatGol: activeSkp.pegawaiPangkatGol,
+          pegawaiRoleType: activeSkp.pegawaiSourceType,
+          tahun: activeSkp.tahun,
+          rhkTitle: targetRhk?.rencanaHasilKerja || 'Pelaksanaan tugas pokok SKP',
+          kategoriBukti: buktiModal.kategori,
+          catatanKegiatan:
+            [buktiModal.judul, buktiModal.ringkasanIsi, buktiModal.teksNarasi]
+              .map(s => s.trim())
+              .filter(Boolean)
+              .join(' — ') ||
+            `Bukti dukung ${buktiModal.kategori} untuk ${targetRhk?.rencanaHasilKerja || 'SKP'}`
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success || !data?.result) {
+        throw new Error(data?.message || 'Gagal menyusun naskah bukti dukung.');
+      }
+      const res = data.result;
+      const matchedKategori =
+        BUKTI_KATEGORI_LIST.find(
+          k => k.toLowerCase() === String(res.kategori || '').toLowerCase()
+        ) || buktiModal.kategori;
+
+      setBuktiModal(prev =>
+        prev
+          ? {
+              ...prev,
+              judul: res.judul || prev.judul,
+              kategori: matchedKategori,
+              ringkasanIsi: res.ringkasanIsi || prev.ringkasanIsi,
+              teksNarasi: res.teksNarasi || prev.teksNarasi,
+              inputMethod:
+                prev.inputMethod === 'file' && !prev.pendingFile ? 'text' : prev.inputMethod,
+              error: ''
+            }
+          : prev
+      );
+    } catch (err: any) {
+      setBuktiModal(prev =>
+        prev
+          ? { ...prev, error: err?.message || 'Gagal menghubungi Asisten AI.' }
+          : prev
+      );
+    } finally {
+      setIsInlineAiBuktiLoading(false);
+    }
+  };
+
   // Filtered RHK & Bukti view
   const filteredRhks = useMemo(() => {
     if (!activeSkp) return [];
@@ -822,6 +963,19 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
                   <span>Cetak SKP</span>
                 </button>
               </>
+            )}
+
+            {activeSkp && canEdit && (
+              <button
+                type="button"
+                onClick={() =>
+                  setAiAssistModal({ open: true, mode: 'generate_rhk' })
+                }
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Asisten AI SKP</span>
+              </button>
             )}
 
             {canEdit && (
@@ -1443,10 +1597,25 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
 
               {/* Tabel 7 Aspek BerAKHLAK */}
               <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-                <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50">
+                <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-bold text-slate-900">
                     Perilaku Kerja ASN BerAKHLAK
                   </h3>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAiAssistModal({
+                          open: true,
+                          mode: 'generate_berakhlak'
+                        })
+                      }
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Bantu Isi BerAKHLAK & Evaluasi dengan AI</span>
+                    </button>
+                  )}
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse text-xs">
@@ -1510,15 +1679,40 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
           {workspaceMode === 'cetak_resmi' && (
             <div className="space-y-4">
               <div className="no-print bg-white border border-slate-200 rounded-lg p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
-                <label className="inline-flex items-center gap-2 font-medium text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tampilkanTtdStempel}
-                    onChange={e => setTampilkanTtdStempel(e.target.checked)}
-                    className="rounded border-slate-300"
-                  />
-                  <span>Tampilkan Tanda Tangan Digital & Stempel Kepala Sekolah</span>
-                </label>
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="inline-flex p-1 bg-slate-100 rounded border border-slate-200 font-semibold">
+                    {[
+                      { id: 'cover_dan_isi' as const, label: 'Cover Garuda + Isi SKP' },
+                      { id: 'cover_saja' as const, label: 'Cover Garuda Saja' },
+                      { id: 'isi_saja' as const, label: 'Isi SKP Saja' }
+                    ].map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setPrintSectionMode(opt.id)}
+                        className={`px-2.5 py-1 rounded transition-colors ${
+                          printSectionMode === opt.id
+                            ? 'bg-white text-blue-900 shadow-xs font-bold'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {printSectionMode !== 'cover_saja' && (
+                    <label className="inline-flex items-center gap-2 font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={tampilkanTtdStempel}
+                        onChange={e => setTampilkanTtdStempel(e.target.checked)}
+                        className="rounded border-slate-300"
+                      />
+                      <span>Tampilkan TTD Digital & Stempel Kepala Sekolah</span>
+                    </label>
+                  )}
+                </div>
 
                 <button
                   type="button"
@@ -1526,13 +1720,27 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
                   className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded font-bold flex items-center gap-1.5"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Cetak Dokumen SKP</span>
+                  <span>
+                    {printSectionMode === 'cover_saja'
+                      ? 'Cetak Cover SKP'
+                      : 'Cetak Dokumen SKP'}
+                  </span>
                 </button>
               </div>
 
-              {/* Printable Sheet */}
-              <div className="print-container bg-white border border-slate-200 rounded-lg p-6 md:p-8 text-black text-[11px] leading-snug space-y-4">
-                <OfficialKopSurat profile={profile} compact />
+              {/* Halaman Depan / Cover SKP Berlogo Garuda Pancasila */}
+              {printSectionMode !== 'isi_saja' && (
+                <SkpCoverSheet
+                  profile={profile}
+                  skp={activeSkp}
+                  withPageBreakAfter={printSectionMode === 'cover_dan_isi'}
+                />
+              )}
+
+              {/* Printable Sheet: Isi Evaluasi SKP */}
+              {printSectionMode !== 'cover_saja' && (
+                <div className="print-container bg-white border border-slate-200 rounded-lg p-6 md:p-8 text-black text-[11px] leading-snug space-y-4">
+                  <OfficialKopSurat profile={profile} compact />
 
                 <div className="text-center space-y-0.5">
                   <div className="text-sm font-extrabold uppercase tracking-wide">
@@ -1784,6 +1992,7 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
                   </div>
                 </div>
               </div>
+              )}
             </div>
           )}
         </>
@@ -2160,9 +2369,29 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Rencana Hasil Kerja Pegawai (Wajib diisi)
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="block font-semibold text-slate-700">
+                    Rencana Hasil Kerja Pegawai (Wajib diisi)
+                  </label>
+                  <button
+                    type="button"
+                    disabled={isInlineAiRhkLoading}
+                    onClick={() => void handleInlineAiRhkAssist()}
+                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded font-semibold flex items-center gap-1 disabled:opacity-60"
+                    title="Tuliskan kata kunci tugas di kotak RHK lalu klik agar AI menyusun RHK Atasan, redaksi RHK baku, dan 3 indikatornya"
+                  >
+                    {isInlineAiRhkLoading ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3 h-3" />
+                    )}
+                    <span>
+                      {isInlineAiRhkLoading
+                        ? 'Merumuskan...'
+                        : 'Bantu Rumuskan dengan AI'}
+                    </span>
+                  </button>
+                </div>
                 <textarea
                   rows={2}
                   value={rhkModal.rencanaHasilKerja}
@@ -2173,7 +2402,7 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
                         : prev
                     )
                   }
-                  placeholder="Contoh: Tersusunnya perangkat pembelajaran dan terlaksananya asesmen sumatif..."
+                  placeholder="Contoh: Tersusunnya perangkat pembelajaran dan terlaksananya asesmen sumatif (atau tulis kata kunci lalu klik Bantu Rumuskan dengan AI)"
                   className="w-full px-3 py-1.5 border border-slate-300 rounded"
                 />
               </div>
@@ -2386,9 +2615,29 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
             </div>
             <form onSubmit={handleSaveBuktiDukung} className="p-5 overflow-y-auto space-y-3.5">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Judul Dokumen Bukti Dukung (Wajib diisi)
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="block font-semibold text-slate-700">
+                    Judul Dokumen Bukti Dukung (Wajib diisi)
+                  </label>
+                  <button
+                    type="button"
+                    disabled={isInlineAiBuktiLoading}
+                    onClick={() => void handleInlineAiBuktiAssist()}
+                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded font-semibold flex items-center gap-1 disabled:opacity-60"
+                    title="Tuliskan kata kunci kegiatan di judul/intisari lalu klik untuk menyusun judul resmi, intisari padat, dan naskah laporan"
+                  >
+                    {isInlineAiBuktiLoading ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3 h-3" />
+                    )}
+                    <span>
+                      {isInlineAiBuktiLoading
+                        ? 'Menyusun...'
+                        : 'Bantu Tulis Judul, Intisari & Naskah dengan AI'}
+                    </span>
+                  </button>
+                </div>
                 <input
                   type="text"
                   value={buktiModal.judul}
@@ -2618,6 +2867,116 @@ export const SkpPegawaiView: React.FC<SkpPegawaiViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {/* MODAL ASISTEN AI PENYUSUN SKP */}
+      {activeSkp && (
+        <SkpAiAssistModal
+          isOpen={aiAssistModal.open}
+          initialMode={aiAssistModal.mode}
+          activeSkp={activeSkp}
+          onClose={() => setAiAssistModal(prev => ({ ...prev, open: false }))}
+          onApplyRhk={(newRhk, includeSuggestedBukti, saranBukti) => {
+            const nowIso = new Date().toISOString();
+            const todayDate = nowIso.slice(0, 10);
+            const seededBukti: SkpBuktiDukungItem[] =
+              includeSuggestedBukti && saranBukti.length > 0
+                ? saranBukti.map((s, idx) => ({
+                    id: `bukti-ai-${Date.now()}-${idx}`,
+                    judul: s.judul,
+                    ringkasanIsi: s.ringkasanIsi,
+                    kategori: s.kategori,
+                    tanggalDokumen: todayDate,
+                    jenisFile: 'text',
+                    teksNarasi: `DRAF BUKTI DUKUNG (${s.kategori.toUpperCase()})\nJudul: ${s.judul}\nPegawai: ${activeSkp.pegawaiNama} (${activeSkp.pegawaiJabatan})\nRHK Terkait: ${newRhk.rencanaHasilKerja}\n\nRingkasan Awal:\n${s.ringkasanIsi}\n\nCatatan: Anda dapat melengkapi naskah ini atau menggantinya dengan unggahan berkas PDF/Foto/Excel melalui tombol Edit.`,
+                    statusVerifikasi: 'Belum Diperiksa',
+                    uploadedAt: nowIso
+                  }))
+                : [];
+
+            const rhkWithBukti: SkpRhkItem = {
+              ...newRhk,
+              buktiDukungList: seededBukti
+            };
+
+            updateActiveSkp(prev => ({
+              ...prev,
+              rhkList: [...prev.rhkList, rhkWithBukti]
+            }));
+            if (seededBukti[0]) {
+              setSelectedEvidenceRef({
+                rhkId: rhkWithBukti.id,
+                buktiId: seededBukti[0].id
+              });
+            }
+            setWorkspaceMode('rhk_bukti');
+            setAiAssistModal(prev => ({ ...prev, open: false }));
+            appendAuditLog(
+              'AI_SKP_RHK',
+              `Menambahkan RHK hasil Asisten AI "${rhkWithBukti.rencanaHasilKerja}" untuk ${activeSkp.pegawaiNama}.`
+            );
+            setFeedback({
+              type: 'success',
+              text: `RHK baru beserta ${rhkWithBukti.indikatorList.length} indikator${
+                seededBukti.length > 0
+                  ? ` dan ${seededBukti.length} draf bukti dukung`
+                  : ''
+              } berhasil diterapkan.`
+            });
+          }}
+          onApplyBukti={(rhkId, buktiDraft) => {
+            const nowIso = new Date().toISOString();
+            const buktiId = `bukti-ai-${Date.now()}`;
+            const newBukti: SkpBuktiDukungItem = {
+              id: buktiId,
+              judul: buktiDraft.judul.trim(),
+              ringkasanIsi: buktiDraft.ringkasanIsi.trim(),
+              kategori: buktiDraft.kategori,
+              tanggalDokumen: nowIso.slice(0, 10),
+              jenisFile: 'text',
+              teksNarasi: buktiDraft.teksNarasi.trim(),
+              statusVerifikasi: 'Belum Diperiksa',
+              uploadedAt: nowIso
+            };
+
+            updateActiveSkp(prev => ({
+              ...prev,
+              rhkList: prev.rhkList.map(r =>
+                r.id === rhkId
+                  ? { ...r, buktiDukungList: [...r.buktiDukungList, newBukti] }
+                  : r
+              )
+            }));
+            setSelectedEvidenceRef({ rhkId, buktiId });
+            setWorkspaceMode('rhk_bukti');
+            setAiAssistModal(prev => ({ ...prev, open: false }));
+            appendAuditLog(
+              'AI_SKP_BUKTI',
+              `Menyimpan naskah bukti dukung AI "${newBukti.judul}" untuk ${activeSkp.pegawaiNama}.`
+            );
+            setFeedback({
+              type: 'success',
+              text: `Naskah bukti dukung "${newBukti.judul}" tersimpan dan langsung dibuka di panel pembaca.`
+            });
+          }}
+          onApplyBerakhlak={(perilakuList, catatanEvaluasi) => {
+            updateActiveSkp(prev => ({
+              ...prev,
+              perilakuList:
+                perilakuList.length > 0 ? perilakuList : prev.perilakuList,
+              catatanEvaluasi: catatanEvaluasi || prev.catatanEvaluasi
+            }));
+            setWorkspaceMode('evaluasi_berakhlak');
+            setAiAssistModal(prev => ({ ...prev, open: false }));
+            appendAuditLog(
+              'AI_SKP_BERAKHLAK',
+              `Menerapkan rekomendasi BerAKHLAK & evaluasi AI untuk ${activeSkp.pegawaiNama}.`
+            );
+            setFeedback({
+              type: 'success',
+              text: 'Ekspektasi, umpan balik BerAKHLAK, dan catatan evaluasi kepala sekolah telah diterapkan.'
+            });
+          }}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { User, SchoolProfile, SuratMasuk, SuratKeluar } from '../types';
 import { resolveDirectImageUrl } from './ExamCardBarcode';
 import { 
@@ -14,7 +14,8 @@ import {
   FileCheck2, 
   ArrowRight,
   Command,
-  FileText
+  FileText,
+  Bell
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -50,11 +51,33 @@ export const Header: React.FC<HeaderProps> = ({
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Click outside listener to close search results dropdown
+  // Incoming mail notification popover state
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const notifContainerRef = useRef<HTMLDivElement>(null);
+
+  const pendingSuratMasuk = useMemo(() => {
+    return suratMasukList.filter(
+      s => s.status === 'Baru' || s.status === 'Menunggu Disposisi'
+    );
+  }, [suratMasukList]);
+
+  const baruCount = useMemo(
+    () => pendingSuratMasuk.filter(s => s.status === 'Baru').length,
+    [pendingSuratMasuk]
+  );
+  const menungguCount = useMemo(
+    () => pendingSuratMasuk.filter(s => s.status === 'Menunggu Disposisi').length,
+    [pendingSuratMasuk]
+  );
+
+  // Click outside listener to close search results & notification dropdowns
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
         setIsSearchOpen(false);
+      }
+      if (notifContainerRef.current && !notifContainerRef.current.contains(event.target as Node)) {
+        setIsNotifOpen(false);
       }
     };
 
@@ -70,14 +93,17 @@ export const Header: React.FC<HeaderProps> = ({
 
       if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
+        setIsNotifOpen(false);
         searchInputRef.current?.focus();
         setIsSearchOpen(true);
       } else if (e.key === '/' && !isInputActive) {
         e.preventDefault();
+        setIsNotifOpen(false);
         searchInputRef.current?.focus();
         setIsSearchOpen(true);
       } else if (e.key === 'Escape') {
         setIsSearchOpen(false);
+        setIsNotifOpen(false);
         searchInputRef.current?.blur();
       }
     };
@@ -382,6 +408,137 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Zone 4: Dynamic User Role & Primary Actions */}
       <div className="flex items-center gap-2 md:gap-2.5 shrink-0">
+        {/* Notification Bell for Surat Masuk ('Baru' / 'Menunggu Disposisi') */}
+        <div ref={notifContainerRef} className="relative">
+          <button
+            type="button"
+            onClick={() => {
+              setIsNotifOpen(prev => !prev);
+              setIsSearchOpen(false);
+            }}
+            aria-label={
+              pendingSuratMasuk.length > 0
+                ? `${pendingSuratMasuk.length} surat masuk berstatus Baru atau Menunggu Disposisi`
+                : 'Notifikasi surat masuk'
+            }
+            title={
+              pendingSuratMasuk.length > 0
+                ? `${pendingSuratMasuk.length} surat masuk berstatus Baru / Menunggu Disposisi`
+                : 'Tidak ada surat masuk menunggu tindak lanjut'
+            }
+            className={`relative flex items-center justify-center p-1.5 rounded-lg border transition-colors active:scale-95 ${
+              pendingSuratMasuk.length > 0
+                ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-400/60 text-amber-300'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-white'
+            }`}
+          >
+            <Bell className="w-4 h-4" />
+            {pendingSuratMasuk.length > 0 && (
+              <span className="-top-1.5 -right-1.5 absolute min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-mono font-bold tabular-nums flex items-center justify-center shadow-sm ring-2 ring-slate-900">
+                {pendingSuratMasuk.length > 99 ? '99+' : pendingSuratMasuk.length}
+              </span>
+            )}
+          </button>
+
+          {/* Notification Popover Dropdown */}
+          {isNotifOpen && (
+            <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl overflow-hidden z-50 text-xs">
+              <div className="px-3.5 py-2.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-bold text-white">Notifikasi Surat Masuk</div>
+                  <div className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                    {pendingSuratMasuk.length > 0
+                      ? `${baruCount} Baru · ${menungguCount} Menunggu Disposisi`
+                      : 'Semua surat masuk telah diproses'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNotifOpen(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded"
+                  aria-label="Tutup notifikasi"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/80">
+                {pendingSuratMasuk.length === 0 ? (
+                  <div className="p-6 text-center text-slate-400 space-y-1">
+                    <Inbox className="w-6 h-6 text-slate-600 mx-auto mb-1" />
+                    <p className="font-medium text-slate-300">Tidak ada antrean surat baru</p>
+                    <p className="text-[11px] text-slate-500">
+                      Surat masuk berstatus Baru atau Menunggu Disposisi akan muncul di sini.
+                    </p>
+                  </div>
+                ) : (
+                  pendingSuratMasuk.map(surat => (
+                    <div
+                      key={surat.id}
+                      className="p-3 hover:bg-slate-800/90 transition-colors flex items-start justify-between gap-2.5"
+                    >
+                      <div
+                        onClick={() => {
+                          onSelectLetter('masuk', surat, 'view');
+                          setIsNotifOpen(false);
+                        }}
+                        className="flex-1 min-w-0 cursor-pointer space-y-0.5"
+                      >
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-400">
+                          <span className="font-bold text-amber-400">{surat.nomorAgenda}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{surat.tanggalTerima}</span>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={`font-sans font-semibold ${
+                              surat.status === 'Baru' ? 'text-amber-300' : 'text-rose-400'
+                            }`}
+                          >
+                            {surat.status}
+                          </span>
+                        </div>
+                        <div className="font-semibold text-white truncate">
+                          {surat.perihal}
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          Dari: {surat.pengirim}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectLetter('masuk', surat, 'disposisi');
+                          setIsNotifOpen(false);
+                        }}
+                        className="px-2 py-1 text-[11px] font-semibold text-blue-300 hover:text-white bg-blue-950/70 hover:bg-blue-600 border border-blue-800/80 rounded shrink-0 flex items-center gap-1 transition-colors"
+                        title="Tindak lanjuti disposisi"
+                      >
+                        <FileCheck2 className="w-3 h-3" />
+                        <span>Disposisi</span>
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="px-3.5 py-2 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onNavigate('surat-masuk');
+                    setIsNotifOpen(false);
+                  }}
+                  className="w-full py-1.5 text-center font-semibold text-amber-400 hover:text-amber-300 flex items-center justify-center gap-1 transition-colors"
+                >
+                  <span>Buka Halaman Surat Masuk</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* User Role Switcher Trigger */}
         <button
           onClick={onOpenSwitchUser}
