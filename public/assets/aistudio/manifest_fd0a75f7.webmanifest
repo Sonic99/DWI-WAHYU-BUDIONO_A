@@ -1,0 +1,28 @@
+{
+  "id": "/",
+  "name": "Database Presensi Kehadiran Pegawai",
+  "short_name": "E-Presensi",
+  "description": "Sistem Database dan Rekapitulasi Presensi Kehadiran Pegawai Dinas Pendidikan & Sekolah secara Terperinci sesuai Standar E-Presensi BKD",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#064e3b",
+  "theme_color": "#047857",
+  "orientation": "any",
+  "lang": "id",
+  "categories": ["productivity", "education", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

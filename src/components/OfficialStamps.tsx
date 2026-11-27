@@ -1,116 +1,60 @@
 import React from 'react';
+import { resolveDirectImageUrl } from './ExamCardBarcode';
+
+/**
+ * URL berkas lokal logo resmi Pemerintah Provinsi Jawa Timur (Wikimedia Commons)
+ */
+export const PEMPROV_JATIM_OFFICIAL_LOGO_URL = '/logo-pemprov-jatim.png';
 
 /**
  * Lambang Resmi Pemerintah Provinsi Jawa Timur ("Jer Basuki Mawa Beya")
- * Dirender sebagai vektor SVG presisi tinggi agar tetap tajam saat dicetak maupun di mode luring.
+ * Menggunakan berkas PNG resmi Pemprov Jatim (public/logo-pemprov-jatim.png) atau kustom upload/link web dengan fallback SVG.
  */
-export const PemprovJatimLogo: React.FC<{ className?: string }> = ({ className = 'w-16 h-16' }) => (
-  <svg
-    viewBox="0 0 120 132"
-    className={className}
-    aria-label="Logo Pemerintah Provinsi Jawa Timur"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <defs>
-      <linearGradient id="jatimBlue" x1="0%" y1="0%" x2="0%" y2="100%">
-        <stop offset="0%" stopColor="#0EA5E9" />
-        <stop offset="100%" stopColor="#0369A1" />
-      </linearGradient>
-      <linearGradient id="jatimGold" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#FACC15" />
-        <stop offset="100%" stopColor="#D97706" />
-      </linearGradient>
-    </defs>
+export const PemprovJatimLogo: React.FC<{ className?: string; customUrl?: string }> = ({
+  className = 'w-16 h-16',
+  customUrl
+}) => {
+  const resolvedUrl = resolveDirectImageUrl(customUrl) || PEMPROV_JATIM_OFFICIAL_LOGO_URL;
+  const [imgFailed, setImgFailed] = React.useState(false);
 
-    {/* Perisai Utama Berbingkai Emas */}
-    <path
-      d="M60 6 L104 16 C106 62 96 96 60 118 C24 96 14 62 16 16 Z"
-      fill="url(#jatimBlue)"
-      stroke="#1E293B"
-      strokeWidth="2.5"
-    />
-    <path
-      d="M60 10 L99 19 C101 60 92 92 60 112 C28 92 19 60 21 19 Z"
-      fill="none"
-      stroke="url(#jatimGold)"
-      strokeWidth="2"
-    />
+  React.useEffect(() => {
+    setImgFailed(false);
+  }, [resolvedUrl]);
 
-    {/* Bintang Kemuliaan di Puncak */}
-    <polygon
-      points="60,15 62.6,22.2 70.2,22.2 64.1,26.6 66.4,33.8 60,29.5 53.6,33.8 55.9,26.6 49.8,22.2 57.4,22.2"
-      fill="#FACC15"
-      stroke="#78350F"
-      strokeWidth="0.7"
-    />
+  if (!imgFailed) {
+    return (
+      <img
+        src={resolvedUrl}
+        alt="Logo Pemerintah Provinsi Jawa Timur"
+        onError={() => setImgFailed(true)}
+        className={`${className} object-contain select-none`}
+      />
+    );
+  }
 
-    {/* Gunung Berapi (Bromo / Semeru) */}
-    <path d="M27 72 L46 47 L60 59 L76 44 L93 72 Z" fill="#15803D" stroke="#052E16" strokeWidth="1" />
-    <path d="M46 47 L53 54 L48 56 L41 53 Z" fill="#94A3B8" opacity="0.55" />
-
-    {/* Tugu Pahlawan Surabaya di Tengah */}
-    <polygon
-      points="60,36 62.5,68 57.5,68"
-      fill="#F8FAFC"
-      stroke="#334155"
-      strokeWidth="0.8"
-    />
-    <rect x="55" y="68" width="10" height="4" rx="0.6" fill="#E2E8F0" stroke="#334155" strokeWidth="0.7" />
-
-    {/* Gerbang Candi Bentar Kiri & Kanan */}
-    <path d="M35 72 L35 58 L41 62 L41 72 Z" fill="#B45309" stroke="#451A03" strokeWidth="0.6" />
-    <path d="M85 72 L85 58 L79 62 L79 72 Z" fill="#B45309" stroke="#451A03" strokeWidth="0.6" />
-
-    {/* Sungai & Roda Gigi Pembangunan */}
-    <path
-      d="M28 76 Q44 72 60 76 T92 76 L88 86 Q60 95 32 86 Z"
-      fill="#0284C7"
-      stroke="#E0F2FE"
-      strokeWidth="1"
-    />
-    <path d="M34 80 Q47 77 60 80 T86 80" fill="none" stroke="#BAE6FD" strokeWidth="1.2" />
-
-    {/* Padi (Kiri) dan Kapas (Kanan) */}
-    <path
-      d="M29 30 C23 48 26 70 43 92"
-      fill="none"
-      stroke="#FACC15"
-      strokeWidth="3"
-      strokeLinecap="round"
-    />
-    <path
-      d="M91 30 C97 48 94 70 77 92"
-      fill="none"
-      stroke="#F8FAFC"
-      strokeWidth="3"
-      strokeLinecap="round"
-    />
-    {/* Aksen bulir padi & kapas */}
-    {[35, 44, 53, 62, 71, 80].map((y, i) => (
-      <React.Fragment key={i}>
-        <circle cx={26 + i * 1.4} cy={y} r="1.8" fill="#FDE047" />
-        <circle cx={94 - i * 1.4} cy={y} r="2.1" fill="#FFFFFF" stroke="#16A34A" strokeWidth="0.6" />
-      </React.Fragment>
-    ))}
-
-    {/* Pita "JAWA TIMUR" */}
-    <path d="M37 88 Q60 95 83 88 L81 97 Q60 104 39 97 Z" fill="#DC2626" stroke="#7F1D1D" strokeWidth="0.8" />
-    <text x="60" y="96" textAnchor="middle" fill="#FFFFFF" fontSize="5.8" fontWeight="800" fontFamily="sans-serif">
-      JAWA TIMUR
-    </text>
-
-    {/* Pita Bawah Semboyan "JER BASUKI MAWA BEYA" */}
-    <path
-      d="M14 111 Q60 125 106 111 L102 123 Q60 134 18 123 Z"
-      fill="#F8FAFC"
-      stroke="#1E293B"
-      strokeWidth="1.4"
-    />
-    <text x="60" y="121" textAnchor="middle" fill="#0F172A" fontSize="5.7" fontWeight="800" letterSpacing="0.4" fontFamily="sans-serif">
-      JER BASUKI MAWA BEYA
-    </text>
-  </svg>
-);
+  return (
+    <svg
+      viewBox="0 0 120 132"
+      className={className}
+      aria-label="Logo Pemerintah Provinsi Jawa Timur"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M60 6 L104 16 C106 62 96 96 60 118 C24 96 14 62 16 16 Z"
+        fill="#0369A1"
+        stroke="#1E293B"
+        strokeWidth="2.5"
+      />
+      <polygon
+        points="60,15 62.6,22.2 70.2,22.2 64.1,26.6 66.4,33.8 60,29.5 53.6,33.8 55.9,26.6 49.8,22.2 57.4,22.2"
+        fill="#FACC15"
+      />
+      <text x="60" y="121" textAnchor="middle" fill="#FFFFFF" fontSize="6" fontWeight="800" fontFamily="sans-serif">
+        JAWA TIMUR
+      </text>
+    </svg>
+  );
+};
 
 /**
  * Stempel Resmi SMA Negeri 9 Surabaya (Dinas Pendidikan Pemprov Jatim)
@@ -213,3 +157,221 @@ export const KepalaSekolahSignatureSvg: React.FC<{ className?: string }> = ({
     />
   </svg>
 );
+
+/**
+ * URL berkas lokal logo resmi SMA Negeri 9 Surabaya (SMANIX) dari Wikimedia Commons (Logo_SMANIX.png)
+ */
+export const SMAN9_OFFICIAL_LOGO_URL = '/logo-sman9.png';
+
+/**
+ * Lambang Resmi SMA Negeri 9 Surabaya (SMANIX)
+ * Menggunakan berkas PNG resmi SMA Negeri 9 Surabaya (public/logo-sman9.png) atau kustom upload/link web dengan fallback SVG aman.
+ */
+export const Sman9SurabayaLogoSvg: React.FC<{
+  className?: string;
+  monochrome?: boolean;
+  customUrl?: string;
+}> = ({ className = 'w-32 h-32', monochrome = false, customUrl }) => {
+  const resolvedUrl = resolveDirectImageUrl(customUrl) || SMAN9_OFFICIAL_LOGO_URL;
+  const [imgFailed, setImgFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    setImgFailed(false);
+  }, [resolvedUrl]);
+
+  if (!imgFailed) {
+    return (
+      <img
+        src={resolvedUrl}
+        alt="Logo Resmi SMA Negeri 9 Surabaya"
+        onError={() => setImgFailed(true)}
+        className={`${className} object-contain select-none ${
+          monochrome ? 'grayscale contrast-125' : ''
+        }`}
+      />
+    );
+  }
+
+  return (
+    <svg
+      viewBox="0 0 200 220"
+      className={className}
+      aria-label="Logo Resmi SMA Negeri 9 Surabaya"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M100 14 L172 40 L166 122 C162 162 134 192 100 208 C66 192 38 162 34 122 L28 40 Z"
+        fill="#1E3A8A"
+        stroke="#D97706"
+        strokeWidth="4.5"
+        strokeLinejoin="round"
+      />
+      <text
+        x="100"
+        y="112"
+        textAnchor="middle"
+        fill="#FACC15"
+        fontSize="42"
+        fontWeight="900"
+        fontFamily="sans-serif"
+      >
+        9
+      </text>
+      <text
+        x="100"
+        y="165"
+        textAnchor="middle"
+        fill="#FFFFFF"
+        fontSize="14"
+        fontWeight="800"
+        fontFamily="sans-serif"
+      >
+        SMAN 9 SBY
+      </text>
+    </svg>
+  );
+};
+
+/**
+ * Background Halaman Air (Watermark) Transparan Terpadu:
+ * Tulisan bergelombang "SMA NEGERI 9 SURABAYA" dengan kerapatan baris & jarak kata yang dapat diatur,
+ * garis gelombang halus, serta Logo Resmi SMA Negeri 9 Surabaya di bagian tengah.
+ */
+export const Sman9WavyWatermarkBg: React.FC<{
+  orientation?: 'portrait' | 'landscape';
+  paperSize?: 'A4' | 'F4';
+  opacityPct?: number;
+  waveRowGapPx?: number;
+  waveWordGapPx?: number;
+  customLogoUrl?: string;
+  sekolahLogoUrl?: string;
+  useCustomLogo?: boolean;
+}> = ({
+  orientation = 'portrait',
+  paperSize = 'A4',
+  opacityPct = 12,
+  waveRowGapPx = 54,
+  waveWordGapPx = 22,
+  customLogoUrl,
+  sekolahLogoUrl,
+  useCustomLogo = false
+}) => {
+  const uid = React.useId().replace(/:/g, '');
+  const isLandscape = orientation === 'landscape';
+  const vbW = isLandscape ? 1120 : 800;
+  const vbH = isLandscape ? 800 : 1120;
+
+  const clampedRowGap = Math.max(28, Math.min(130, waveRowGapPx));
+  const clampedWordGap = Math.max(4, Math.min(80, waveWordGapPx));
+  const gapHalf = Math.round(clampedWordGap * 0.5);
+  const waveAmp = Math.min(28, Math.max(10, Math.round(clampedRowGap * 0.34)));
+
+  // Bangkitkan koordinat baris gelombang secara seragam agar seluruh sudut halaman terisi penuh tanpa tabrakan
+  const waveRows = React.useMemo(() => {
+    const rows: number[] = [];
+    for (let y = -130; y <= vbH + 150; y += clampedRowGap) {
+      rows.push(y);
+    }
+    return rows;
+  }, [vbH, clampedRowGap]);
+
+  const logoSizeClass = isLandscape
+    ? 'w-[104mm] h-[104mm]'
+    : paperSize === 'F4'
+      ? 'w-[130mm] h-[130mm]'
+      : 'w-[120mm] h-[120mm]';
+
+  // Lebar segmen gelombang & panjang kurva melebihi batas viewBox kiri/kanan agar stager teks mulus
+  const xStart = -360;
+  const seg = 260;
+  const segCount = Math.ceil((vbW + 760) / seg);
+  const fontSize = clampedRowGap <= 40 ? 11.5 : clampedRowGap <= 62 ? 12.5 : 13.5;
+
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none select-none absolute inset-0 z-0 overflow-hidden"
+      style={{ opacity: Math.max(0.03, Math.min(0.4, opacityPct / 100)) }}
+    >
+      {/* Lapisan Pola Tulisan Bergelombang "SMA NEGERI 9 SURABAYA" */}
+      <svg
+        viewBox={`0 0 ${vbW} ${vbH}`}
+        preserveAspectRatio="xMidYMid slice"
+        className="w-full h-full"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          {waveRows.map((yBase, idx) => {
+            let d = `M ${xStart},${yBase} Q ${xStart + seg / 2},${yBase - waveAmp} ${xStart + seg},${yBase}`;
+            for (let s = 2; s <= segCount; s++) {
+              d += ` T ${xStart + seg * s},${yBase}`;
+            }
+            return <path key={idx} id={`sman9Wave-${uid}-${idx}`} d={d} />;
+          })}
+        </defs>
+
+        <g transform={`rotate(-11 ${vbW / 2} ${vbH / 2})`}>
+          {waveRows.map((yBase, idx) => {
+            const pathId = `sman9Wave-${uid}-${idx}`;
+            const startOffsetPct = `${(idx % 3) * 4 + 1}%`;
+            let guideD = `M ${xStart},${yBase + 8} Q ${xStart + seg / 2},${yBase + 8 - waveAmp} ${xStart + seg},${yBase + 8}`;
+            for (let s = 2; s <= segCount; s++) {
+              guideD += ` T ${xStart + seg * s},${yBase + 8}`;
+            }
+            return (
+              <g key={idx}>
+                <use
+                  href={`#${pathId}`}
+                  fill="none"
+                  stroke="#1E3A8A"
+                  strokeWidth="0.6"
+                  opacity="0.28"
+                />
+                <text
+                  fill="#1E3A8A"
+                  fontSize={fontSize}
+                  fontWeight="800"
+                  letterSpacing={clampedWordGap < 16 ? '1.6' : '2.4'}
+                  fontFamily="sans-serif"
+                  opacity="0.64"
+                >
+                  <textPath href={`#${pathId}`} startOffset={startOffsetPct}>
+                    {Array.from({ length: 12 }).map((_, rIdx) => (
+                      <React.Fragment key={rIdx}>
+                        <tspan dx={rIdx === 0 ? 0 : gapHalf}>SMA NEGERI 9 SURABAYA</tspan>
+                        <tspan dx={gapHalf}>•</tspan>
+                      </React.Fragment>
+                    ))}
+                  </textPath>
+                </text>
+                {/* Garis gelombang pengapit halus */}
+                <path
+                  d={guideD}
+                  fill="none"
+                  stroke="#D97706"
+                  strokeWidth="0.45"
+                  opacity="0.24"
+                />
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+
+      {/* Lapisan Tengah: Logo Resmi SMAN 9 Surabaya */}
+      <div className="absolute inset-0 flex items-center justify-center">
+        {useCustomLogo && customLogoUrl ? (
+          <img
+            src={resolveDirectImageUrl(customLogoUrl)}
+            alt=""
+            className={`${logoSizeClass} object-contain grayscale-[20%] opacity-90`}
+          />
+        ) : (
+          <Sman9SurabayaLogoSvg customUrl={sekolahLogoUrl} className={`${logoSizeClass} opacity-90`} />
+        )}
+      </div>
+    </div>
+  );
+};
+
+

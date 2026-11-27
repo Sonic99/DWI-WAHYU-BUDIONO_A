@@ -19,8 +19,12 @@ import {
   appendAuditLog,
   saveStoredSiswa,
   saveStoredGuru,
-  saveStoredTendik
+  saveStoredTendik,
+  getStoredBukuIndukSiswaMeta,
+  saveStoredBukuIndukSiswaMeta
 } from '../services/storageService';
+import { compressGtkPhotoFileToDataUrl } from '../services/gtkPhotoStorage';
+import { resolveDirectImageUrl } from './ExamCardBarcode';
 import { 
   Users, 
   GraduationCap, 
@@ -42,8 +46,61 @@ import {
   Eye,
   Info,
   Briefcase,
-  UserCheck
+  UserCheck,
+  Camera,
+  Contact2,
+  UserMinus,
+  RotateCcw
 } from 'lucide-react';
+
+type ExitModeGtk = 'mutasi' | 'meninggal' | 'berhenti' | 'hapus_permanen';
+type ExitModeSiswa = 'mutasi' | 'berhenti' | 'hapus_permanen';
+
+interface ExitModalState {
+  entity: 'siswa' | 'guru' | 'tendik';
+  record: Siswa | Guru;
+  mode: ExitModeGtk | ExitModeSiswa;
+  tanggalKeluar: string;
+  tujuanMutasi: string;
+  alasanKeluar: string;
+  nomorSuratMutasi: string;
+  error: string;
+}
+
+const isSiswaExitedRecord = (s: Siswa): boolean =>
+  Boolean(s.status && s.status !== 'Aktif');
+
+const isGtkExitedRecord = (g: Guru): boolean =>
+  Boolean(g.statusAktif && g.statusAktif !== 'Aktif');
+
+const formatSiswaExitSummary = (s: Siswa): string => {
+  if (!isSiswaExitedRecord(s)) return '';
+  if (s.status === 'Mutasi' || s.jenisKeluar === 'Mutasi' || s.status === 'Pindah') {
+    const tujuan = s.tujuanMutasi ? ` ke ${s.tujuanMutasi}` : '';
+    const alasan = s.alasanKeluar ? ` — ${s.alasanKeluar}` : '';
+    return `Mutasi${tujuan}${alasan}`;
+  }
+  if (s.status === 'Berhenti' || s.jenisKeluar === 'Berhenti Sekolah') {
+    return `Berhenti Sekolah${s.alasanKeluar ? `: ${s.alasanKeluar}` : ''}`;
+  }
+  return s.status || 'Keluar';
+};
+
+const formatGtkExitSummary = (g: Guru): string => {
+  if (!isGtkExitedRecord(g)) return '';
+  if (g.statusAktif === 'Mutasi' || g.jenisKeluar === 'Mutasi') {
+    const tujuan = g.tujuanMutasi ? ` ke ${g.tujuanMutasi}` : '';
+    const ket = g.alasanKeluar ? ` — ${g.alasanKeluar}` : '';
+    return `Mutasi${tujuan}${ket}`;
+  }
+  if (g.statusAktif === 'Meninggal Dunia' || g.jenisKeluar === 'Meninggal Dunia') {
+    return `Meninggal Dunia${g.alasanKeluar ? ` — ${g.alasanKeluar}` : ''}`;
+  }
+  if (g.statusAktif === 'Berhenti' || g.statusAktif === 'Pensiun' || g.jenisKeluar === 'Berhenti' || g.jenisKeluar === 'Pensiun') {
+    return `Berhenti${g.alasanKeluar ? `: ${g.alasanKeluar}` : ''}`;
+  }
+  return g.statusAktif || 'Keluar';
+};
 
 interface MasterDataViewProps {
   siswaList: Siswa[];
@@ -54,6 +111,7 @@ interface MasterDataViewProps {
   onUpdateGuru: (list: Guru[]) => void;
   onUpdateTendik: (list: Tendik[]) => void;
   onSelectForLetter?: (target: { type: 'siswa' | 'guru' | 'tendik'; data: Siswa | Guru | Tendik }) => void;
+  onOpenProfileCard?: (gtkId: string) => void;
 }
 
 export const MasterDataView: React.FC<MasterDataViewProps> = ({
@@ -64,7 +122,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
   onUpdateSiswa,
   onUpdateGuru,
   onUpdateTendik,
-  onSelectForLetter
+  onSelectForLetter,
+  onOpenProfileCard
 }) => {
   const [activeTab, setActiveTab] = useState<'siswa' | 'guru' | 'tendik'>('siswa');
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,12 +132,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
   const [filterKelas, setFilterKelas] = useState('SEMUA');
   const [filterJK, setFilterJK] = useState('SEMUA');
   const [filterPip, setFilterPip] = useState('SEMUA');
+  const [filterKeaktifanSiswa, setFilterKeaktifanSiswa] = useState<'SEMUA' | 'AKTIF' | 'KELUAR'>('SEMUA');
 
   // Guru & Tendik Filters
   const [filterStatusGuru, setFilterStatusGuru] = useState('SEMUA');
   const [filterJKGuru, setFilterJKGuru] = useState('SEMUA');
   const [filterStatusTendik, setFilterStatusTendik] = useState('SEMUA');
   const [filterJKTendik, setFilterJKTendik] = useState('SEMUA');
+  const [filterKeaktifanGtk, setFilterKeaktifanGtk] = useState<'SEMUA' | 'AKTIF' | 'KELUAR'>('SEMUA');
+
+  // Exit / Mutasi / Delete Modal & Feedback Banner
+  const [exitModalState, setExitModalState] = useState<ExitModalState | null>(null);
+  const [masterFeedback, setMasterFeedback] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   
   // Table View Mode (Ringkas vs Dapodik 51 Kolom)
   const [tableViewMode, setTableViewMode] = useState<'ringkas' | 'dapodik_lengkap'>('ringkas');
@@ -281,7 +346,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         nisn.includes(term) ||
         kelas.includes(term) ||
         (s.alamat && s.alamat.toLowerCase().includes(term)) ||
-        (s.sekolahAsal && s.sekolahAsal.toLowerCase().includes(term));
+        (s.sekolahAsal && s.sekolahAsal.toLowerCase().includes(term)) ||
+        (s.tujuanMutasi && s.tujuanMutasi.toLowerCase().includes(term)) ||
+        (s.alasanKeluar && s.alasanKeluar.toLowerCase().includes(term));
 
       const currentClass = s.rombelSaatIni || s.kelas;
       const matchesKelas = filterKelas === 'SEMUA' || currentClass === filterKelas;
@@ -293,9 +360,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         (filterPip === 'YA' && isPip) ||
         (filterPip === 'TIDAK' && !isPip);
 
-      return matchesSearch && matchesKelas && matchesJK && matchesPip;
+      const exited = isSiswaExitedRecord(s);
+      const matchesKeaktifan =
+        filterKeaktifanSiswa === 'SEMUA' ||
+        (filterKeaktifanSiswa === 'AKTIF' && !exited) ||
+        (filterKeaktifanSiswa === 'KELUAR' && exited);
+
+      return matchesSearch && matchesKelas && matchesJK && matchesPip && matchesKeaktifan;
     });
-  }, [siswaList, searchTerm, filterKelas, filterJK, filterPip]);
+  }, [siswaList, searchTerm, filterKelas, filterJK, filterPip, filterKeaktifanSiswa]);
 
   // Filtered Guru
   const filteredGuru = useMemo(() => {
@@ -313,13 +386,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         nuptk.includes(term) ||
         mapel.toLowerCase().includes(term) ||
         g.jabatan.toLowerCase().includes(term) ||
-        (g.tugasTambahan && g.tugasTambahan.toLowerCase().includes(term));
+        (g.tugasTambahan && g.tugasTambahan.toLowerCase().includes(term)) ||
+        (g.tujuanMutasi && g.tujuanMutasi.toLowerCase().includes(term)) ||
+        (g.alasanKeluar && g.alasanKeluar.toLowerCase().includes(term));
 
       const matchesStatus = filterStatusGuru === 'SEMUA' || status === filterStatusGuru;
       const matchesJK = filterJKGuru === 'SEMUA' || g.jenisKelamin === filterJKGuru;
-      return matchesSearch && matchesStatus && matchesJK;
+      const exited = isGtkExitedRecord(g);
+      const matchesKeaktifan =
+        filterKeaktifanGtk === 'SEMUA' ||
+        (filterKeaktifanGtk === 'AKTIF' && !exited) ||
+        (filterKeaktifanGtk === 'KELUAR' && exited);
+
+      return matchesSearch && matchesStatus && matchesJK && matchesKeaktifan;
     });
-  }, [guruList, searchTerm, filterStatusGuru, filterJKGuru]);
+  }, [guruList, searchTerm, filterStatusGuru, filterJKGuru, filterKeaktifanGtk]);
 
   // Filtered Tendik
   const filteredTendik = useMemo(() => {
@@ -339,15 +420,95 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         nuptk.includes(term) ||
         nik.includes(term) ||
         tugas.includes(term) ||
-        email.includes(term);
+        email.includes(term) ||
+        (t.tujuanMutasi && t.tujuanMutasi.toLowerCase().includes(term)) ||
+        (t.alasanKeluar && t.alasanKeluar.toLowerCase().includes(term));
 
       const matchesStatus = filterStatusTendik === 'SEMUA' || status === filterStatusTendik;
       const matchesJK = filterJKTendik === 'SEMUA' || t.jenisKelamin === filterJKTendik;
-      return matchesSearch && matchesStatus && matchesJK;
+      const exited = isGtkExitedRecord(t);
+      const matchesKeaktifan =
+        filterKeaktifanGtk === 'SEMUA' ||
+        (filterKeaktifanGtk === 'AKTIF' && !exited) ||
+        (filterKeaktifanGtk === 'KELUAR' && exited);
+
+      return matchesSearch && matchesStatus && matchesJK && matchesKeaktifan;
     });
-  }, [tendikList, searchTerm, filterStatusTendik, filterJKTendik]);
+  }, [tendikList, searchTerm, filterStatusTendik, filterJKTendik, filterKeaktifanGtk]);
 
   const activeGtkRows = activeTab === 'tendik' ? filteredTendik : filteredGuru;
+
+  const masterStats = useMemo(() => {
+    const activeGuruList = guruList.filter(g => !isGtkExitedRecord(g));
+    const activeTendikList = tendikList.filter(t => !isGtkExitedRecord(t));
+    const activeSiswaList = siswaList.filter(s => !isSiswaExitedRecord(s));
+
+    const scoreGtkRecord = (g: Guru): { filled: number; total: number; coreComplete: boolean; hasPhoto: boolean } => {
+      const checks = [
+        Boolean((g.nama || '').trim()),
+        Boolean((g.nip || g.nuptk || g.nik || '').trim()),
+        Boolean((g.statusKepegawaian || g.status || '').trim() && (g.jenisPtk || g.jabatan || '').trim()),
+        Boolean((g.tempatLahir || '').trim() && (g.tanggalLahir || '').trim()),
+        Boolean((g.alamatJalan || '').trim()),
+        Boolean((g.hp || g.noHp || g.email || '').trim()),
+        Boolean((g.skPengangkatan || g.tmtPengangkatan || '').trim()),
+        Boolean((g.fotoUrl || '').trim())
+      ];
+      const coreComplete = checks.slice(0, 7).every(Boolean);
+      const hasPhoto = checks[7];
+      const filled = checks.filter(Boolean).length;
+      return { filled, total: checks.length, coreComplete, hasPhoto };
+    };
+
+    const guruScores = activeGuruList.map(scoreGtkRecord);
+    const tendikScores = activeTendikList.map(scoreGtkRecord);
+    const allGtkScores = [...guruScores, ...tendikScores];
+
+    const calcAvgPct = (scores: typeof guruScores) => {
+      if (scores.length === 0) return 0;
+      const sum = scores.reduce((acc, s) => acc + s.filled / s.total, 0);
+      return Math.round((sum / scores.length) * 100);
+    };
+
+    const guruPns = activeGuruList.filter(g => (g.statusKepegawaian || g.status || '').toUpperCase().includes('PNS')).length;
+    const guruPppk = activeGuruList.filter(g => (g.statusKepegawaian || g.status || '').toUpperCase().includes('PPPK')).length;
+    const guruHonorer = Math.max(0, activeGuruList.length - guruPns - guruPppk);
+
+    const tendikAsn = activeTendikList.filter(t => {
+      const st = (t.statusKepegawaian || t.status || '').toUpperCase();
+      return st.includes('PNS') || st.includes('PPPK');
+    }).length;
+    const tendikHonorer = Math.max(0, activeTendikList.length - tendikAsn);
+
+    const totalGtk = activeGuruList.length + activeTendikList.length;
+    const gtkBiodataLengkapCount = allGtkScores.filter(s => s.coreComplete).length;
+    const gtkFotoCount = allGtkScores.filter(s => s.hasPhoto).length;
+
+    const guruKeluarCount = guruList.length - activeGuruList.length;
+    const tendikKeluarCount = tendikList.length - activeTendikList.length;
+    const siswaKeluarCount = siswaList.length - activeSiswaList.length;
+
+    return {
+      jumlahGuru: activeGuruList.length,
+      guruPns,
+      guruPppk,
+      guruHonorer,
+      guruKeluarCount,
+      jumlahTendik: activeTendikList.length,
+      tendikAsn,
+      tendikHonorer,
+      tendikKeluarCount,
+      jumlahSiswa: activeSiswaList.length,
+      siswaKeluarCount,
+      jumlahRombel: availableClasses.length,
+      totalGtk,
+      persenProfilLengkap: calcAvgPct(allGtkScores),
+      guruLengkapPct: calcAvgPct(guruScores),
+      tendikLengkapPct: calcAvgPct(tendikScores),
+      gtkBiodataLengkapCount,
+      gtkFotoCount
+    };
+  }, [guruList, tendikList, siswaList, availableClasses]);
 
   // ===================== SISWA HANDLERS =====================
   const handleOpenSiswaModal = (siswa?: Siswa) => {
@@ -484,13 +645,22 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
     setIsSiswaModalOpen(false);
   };
 
-  const handleDeleteSiswa = (id: string, nama: string) => {
-    if (confirm(`Apakah Anda yakin ingin menghapus data siswa Dapodik: ${nama}?`)) {
-      const updated = siswaList.filter(s => s.id !== id);
-      onUpdateSiswa(updated);
-      saveStoredSiswa(updated);
-      appendAuditLog('HAPUS_SISWA', `Menghapus data siswa Dapodik ${nama}.`);
-    }
+  const openSiswaExitModal = (siswa: Siswa) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultMode: ExitModeSiswa =
+      siswa.status === 'Berhenti' || siswa.jenisKeluar === 'Berhenti Sekolah'
+        ? 'berhenti'
+        : 'mutasi';
+    setExitModalState({
+      entity: 'siswa',
+      record: siswa,
+      mode: defaultMode,
+      tanggalKeluar: siswa.tanggalKeluar || today,
+      tujuanMutasi: siswa.tujuanMutasi || '',
+      alasanKeluar: siswa.alasanKeluar || '',
+      nomorSuratMutasi: siswa.nomorSuratMutasi || '',
+      error: ''
+    });
   };
 
   const handleSiswaFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -718,21 +888,228 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
     setIsGuruModalOpen(false);
   };
 
-  const handleDeleteGtk = (id: string, nama: string, entity: 'guru' | 'tendik') => {
-    const label = entity === 'tendik' ? 'tenaga kependidikan (Tendik)' : 'tenaga pendidik';
-    if (confirm(`Apakah Anda yakin ingin menghapus data ${label} Dapodik GTK: ${nama}?`)) {
+  const openGtkExitModal = (gtk: Guru, entity: 'guru' | 'tendik') => {
+    const today = new Date().toISOString().slice(0, 10);
+    let defaultMode: ExitModeGtk = 'mutasi';
+    if (gtk.statusAktif === 'Meninggal Dunia' || gtk.jenisKeluar === 'Meninggal Dunia') {
+      defaultMode = 'meninggal';
+    } else if (
+      gtk.statusAktif === 'Berhenti' ||
+      gtk.statusAktif === 'Pensiun' ||
+      gtk.jenisKeluar === 'Berhenti' ||
+      gtk.jenisKeluar === 'Pensiun'
+    ) {
+      defaultMode = 'berhenti';
+    }
+    setExitModalState({
+      entity,
+      record: gtk,
+      mode: defaultMode,
+      tanggalKeluar: gtk.tanggalKeluar || today,
+      tujuanMutasi: gtk.tujuanMutasi || '',
+      alasanKeluar: gtk.alasanKeluar || '',
+      nomorSuratMutasi: '',
+      error: ''
+    });
+  };
+
+  const handleConfirmExitOrDelete = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!exitModalState) return;
+    const { entity, record, mode, tanggalKeluar, tujuanMutasi, alasanKeluar, nomorSuratMutasi } = exitModalState;
+
+    if (entity === 'siswa') {
+      const siswa = record as Siswa;
+      if (mode === 'hapus_permanen') {
+        const updated = siswaList.filter(s => s.id !== siswa.id);
+        onUpdateSiswa(updated);
+        saveStoredSiswa(updated);
+        appendAuditLog('HAPUS_SISWA', `Menghapus permanen data siswa ${siswa.nama}.`);
+        setMasterFeedback({ type: 'info', text: `Data siswa "${siswa.nama}" telah dihapus permanen dari database.` });
+        setExitModalState(null);
+        return;
+      }
+
+      if (mode === 'mutasi' && !tujuanMutasi.trim()) {
+        setExitModalState(prev => prev ? { ...prev, error: 'Harap jelaskan sekolah/instansi tujuan mutasi siswa.' } : prev);
+        return;
+      }
+
+      if (mode === 'berhenti' && !alasanKeluar.trim()) {
+        setExitModalState(prev => prev ? { ...prev, error: 'Harap tuliskan alasan siswa berhenti sekolah.' } : prev);
+        return;
+      }
+
+      const nextStatus: Siswa['status'] = mode === 'mutasi' ? 'Mutasi' : 'Berhenti';
+      const nextJenisKeluar: Siswa['jenisKeluar'] = mode === 'mutasi' ? 'Mutasi' : 'Berhenti Sekolah';
+      const updatedSiswa: Siswa = {
+        ...siswa,
+        status: nextStatus,
+        jenisKeluar: nextJenisKeluar,
+        tanggalKeluar: tanggalKeluar || new Date().toISOString().slice(0, 10),
+        tujuanMutasi: mode === 'mutasi' ? tujuanMutasi.trim() : undefined,
+        alasanKeluar: alasanKeluar.trim() || undefined,
+        nomorSuratMutasi: mode === 'mutasi' && nomorSuratMutasi.trim() ? nomorSuratMutasi.trim() : undefined
+      };
+
+      const updatedList = siswaList.map(s => (s.id === siswa.id ? updatedSiswa : s));
+      onUpdateSiswa(updatedList);
+      saveStoredSiswa(updatedList);
+
+      // Sinkronkan ke metadata Buku Induk Siswa
+      const metaMap = getStoredBukuIndukSiswaMeta();
+      const existingMeta = metaMap[siswa.id] || {};
+      const bukuIndukReason =
+        mode === 'mutasi'
+          ? `Mutasi ke ${tujuanMutasi.trim()}${alasanKeluar.trim() ? ` (${alasanKeluar.trim()})` : ''}${nomorSuratMutasi.trim() ? ` [No. Surat: ${nomorSuratMutasi.trim()}]` : ''}`
+          : `Berhenti Sekolah: ${alasanKeluar.trim()}`;
+      saveStoredBukuIndukSiswaMeta({
+        ...metaMap,
+        [siswa.id]: {
+          ...existingMeta,
+          tanggalKeluarMutasi: updatedSiswa.tanggalKeluar || '',
+          alasanKeluarMutasi: bukuIndukReason
+        }
+      });
+
+      appendAuditLog(
+        mode === 'mutasi' ? 'SISWA_MUTASI' : 'SISWA_BERHENTI',
+        `Mencatat siswa keluar (${nextJenisKeluar}): ${siswa.nama} — ${bukuIndukReason}.`
+      );
+      setMasterFeedback({
+        type: 'success',
+        text: `Status siswa "${siswa.nama}" diperbarui menjadi ${nextJenisKeluar} (${mode === 'mutasi' ? `Tujuan: ${tujuanMutasi.trim()}` : `Alasan: ${alasanKeluar.trim()}`}).`
+      });
+      setExitModalState(null);
+      return;
+    }
+
+    // GTK: Guru atau Tendik
+    const gtk = record as Guru;
+    const entityLabel = entity === 'tendik' ? 'Tendik' : 'Guru';
+
+    if (mode === 'hapus_permanen') {
       if (entity === 'tendik') {
-        const updated = tendikList.filter(t => t.id !== id);
+        const updated = tendikList.filter(t => t.id !== gtk.id);
         onUpdateTendik(updated);
         saveStoredTendik(updated);
-        appendAuditLog('HAPUS_TENDIK', `Menghapus data tendik ${nama}.`);
+        appendAuditLog('HAPUS_TENDIK', `Menghapus permanen data tendik ${gtk.nama}.`);
       } else {
-        const updated = guruList.filter(g => g.id !== id);
+        const updated = guruList.filter(g => g.id !== gtk.id);
         onUpdateGuru(updated);
         saveStoredGuru(updated);
-        appendAuditLog('HAPUS_GURU', `Menghapus data tenaga pendidik ${nama}.`);
+        appendAuditLog('HAPUS_GURU', `Menghapus permanen data guru ${gtk.nama}.`);
       }
+      setMasterFeedback({ type: 'info', text: `Data ${entityLabel} "${gtk.nama}" telah dihapus permanen dari database.` });
+      setExitModalState(null);
+      return;
     }
+
+    if (mode === 'mutasi' && !tujuanMutasi.trim()) {
+      setExitModalState(prev => prev ? { ...prev, error: 'Harap tuliskan unit kerja / sekolah tujuan mutasi.' } : prev);
+      return;
+    }
+
+    if (mode === 'berhenti' && !alasanKeluar.trim()) {
+      setExitModalState(prev => prev ? { ...prev, error: 'Harap pilih atau tuliskan keterangan berhenti / pensiun.' } : prev);
+      return;
+    }
+
+    const nextStatusAktif: Guru['statusAktif'] =
+      mode === 'mutasi' ? 'Mutasi' : mode === 'meninggal' ? 'Meninggal Dunia' : 'Berhenti';
+    const updatedGtk: Guru = {
+      ...gtk,
+      statusAktif: nextStatusAktif,
+      jenisKeluar: nextStatusAktif,
+      tanggalKeluar: tanggalKeluar || new Date().toISOString().slice(0, 10),
+      tujuanMutasi: mode === 'mutasi' ? tujuanMutasi.trim() : undefined,
+      alasanKeluar: alasanKeluar.trim() || undefined
+    };
+
+    if (entity === 'tendik') {
+      const updatedList = tendikList.map(t => (t.id === gtk.id ? (updatedGtk as Tendik) : t));
+      onUpdateTendik(updatedList);
+      saveStoredTendik(updatedList);
+    } else {
+      const updatedList = guruList.map(g => (g.id === gtk.id ? updatedGtk : g));
+      onUpdateGuru(updatedList);
+      saveStoredGuru(updatedList);
+    }
+
+    const detailLog =
+      mode === 'mutasi'
+        ? `Mutasi ke ${tujuanMutasi.trim()}${alasanKeluar.trim() ? ` (${alasanKeluar.trim()})` : ''}`
+        : mode === 'meninggal'
+        ? `Meninggal Dunia${alasanKeluar.trim() ? ` (${alasanKeluar.trim()})` : ''}`
+        : `Berhenti: ${alasanKeluar.trim()}`;
+
+    appendAuditLog(
+      entity === 'tendik' ? 'TENDIK_KELUAR' : 'GURU_KELUAR',
+      `Mencatat ${entityLabel} keluar (${nextStatusAktif}): ${gtk.nama} — ${detailLog}.`
+    );
+    setMasterFeedback({
+      type: 'success',
+      text: `Status ${entityLabel} "${gtk.nama}" dicatat sebagai ${nextStatusAktif} (${detailLog}).`
+    });
+    setExitModalState(null);
+  };
+
+  const handleRestoreActive = (entity: 'siswa' | 'guru' | 'tendik', record: Siswa | Guru) => {
+    if (entity === 'siswa') {
+      const siswa = record as Siswa;
+      const updatedSiswa: Siswa = {
+        ...siswa,
+        status: 'Aktif',
+        jenisKeluar: undefined,
+        tanggalKeluar: undefined,
+        tujuanMutasi: undefined,
+        alasanKeluar: undefined,
+        nomorSuratMutasi: undefined
+      };
+      const updatedList = siswaList.map(s => (s.id === siswa.id ? updatedSiswa : s));
+      onUpdateSiswa(updatedList);
+      saveStoredSiswa(updatedList);
+
+      const metaMap = getStoredBukuIndukSiswaMeta();
+      if (metaMap[siswa.id]) {
+        saveStoredBukuIndukSiswaMeta({
+          ...metaMap,
+          [siswa.id]: {
+            ...metaMap[siswa.id],
+            tanggalKeluarMutasi: '',
+            alasanKeluarMutasi: ''
+          }
+        });
+      }
+      appendAuditLog('AKTIFKAN_SISWA', `Mengaktifkan kembali status siswa ${siswa.nama} menjadi Aktif.`);
+      setMasterFeedback({ type: 'success', text: `Siswa "${siswa.nama}" telah diaktifkan kembali.` });
+      return;
+    }
+
+    const gtk = record as Guru;
+    const updatedGtk: Guru = {
+      ...gtk,
+      statusAktif: 'Aktif',
+      jenisKeluar: undefined,
+      tanggalKeluar: undefined,
+      tujuanMutasi: undefined,
+      alasanKeluar: undefined
+    };
+    if (entity === 'tendik') {
+      const updatedList = tendikList.map(t => (t.id === gtk.id ? (updatedGtk as Tendik) : t));
+      onUpdateTendik(updatedList);
+      saveStoredTendik(updatedList);
+      appendAuditLog('AKTIFKAN_TENDIK', `Mengaktifkan kembali status tendik ${gtk.nama} menjadi Aktif.`);
+    } else {
+      const updatedList = guruList.map(g => (g.id === gtk.id ? updatedGtk : g));
+      onUpdateGuru(updatedList);
+      saveStoredGuru(updatedList);
+      appendAuditLog('AKTIFKAN_GURU', `Mengaktifkan kembali status guru ${gtk.nama} menjadi Aktif.`);
+    }
+    setMasterFeedback({
+      type: 'success',
+      text: `${entity === 'tendik' ? 'Tendik' : 'Guru'} "${gtk.nama}" telah diaktifkan kembali.`
+    });
   };
 
   const handleGuruFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -761,9 +1138,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
     const isTendik = gtkImportEntity === 'tendik';
 
     if (isTendik) {
+      const existingPhotoByKey = new Map<string, string>();
+      tendikList.forEach(t => {
+        if (t.fotoUrl) {
+          const k = (t.nik || t.nip || t.nuptk || t.nama || t.id).toLowerCase();
+          existingPhotoByKey.set(k, t.fotoUrl);
+        }
+      });
       let finalTendikList: Tendik[] = [];
       if (guruImportMode === 'replace') {
-        finalTendikList = importedData as Tendik[];
+        finalTendikList = (importedData as Tendik[]).map(nt => {
+          const k = (nt.nik || nt.nip || nt.nuptk || nt.nama || nt.id).toLowerCase();
+          return nt.fotoUrl ? nt : { ...nt, fotoUrl: existingPhotoByKey.get(k) || '' };
+        });
       } else {
         const existingMap = new Map<string, Tendik>();
         tendikList.forEach(t => {
@@ -774,7 +1161,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
           const key = (nt.nik || nt.nip || nt.nuptk || nt.nama || nt.id).toLowerCase();
           const matched = existingMap.get(key);
           if (matched) {
-            existingMap.set(key, { ...matched, ...nt, id: matched.id });
+            existingMap.set(key, {
+              ...matched,
+              ...nt,
+              id: matched.id,
+              fotoUrl: nt.fotoUrl || matched.fotoUrl || ''
+            });
           } else {
             existingMap.set(key, nt as Tendik);
           }
@@ -790,9 +1182,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
       );
       alert(`Berhasil mengimpor data GTK Tendik! Total sekarang terdapat ${finalTendikList.length} tenaga kependidikan dalam database.`);
     } else {
+      const existingPhotoByKey = new Map<string, string>();
+      guruList.forEach(g => {
+        if (g.fotoUrl) {
+          const k = (g.nip || g.nuptk || g.nama || g.id).toLowerCase();
+          existingPhotoByKey.set(k, g.fotoUrl);
+        }
+      });
       let finalGuruList: Guru[] = [];
       if (guruImportMode === 'replace') {
-        finalGuruList = importedData;
+        finalGuruList = importedData.map(ng => {
+          const k = (ng.nip || ng.nuptk || ng.nama || ng.id).toLowerCase();
+          return ng.fotoUrl ? ng : { ...ng, fotoUrl: existingPhotoByKey.get(k) || '' };
+        });
       } else {
         const existingMap = new Map<string, Guru>();
         guruList.forEach(g => {
@@ -804,7 +1206,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
           const key = ng.nip || ng.nuptk || ng.id;
           const matched = existingMap.get(key);
           if (matched) {
-            existingMap.set(key, { ...matched, ...ng, id: matched.id });
+            existingMap.set(key, {
+              ...matched,
+              ...ng,
+              id: matched.id,
+              fotoUrl: ng.fotoUrl || matched.fotoUrl || ''
+            });
           } else {
             existingMap.set(key, ng);
           }
@@ -1033,6 +1440,141 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         </div>
       </div>
 
+      {/* Ringkasan Statistik Master Data */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <button
+          type="button"
+          onClick={() => { setActiveTab('guru'); setSearchTerm(''); }}
+          className={`text-left bg-white border rounded-lg p-4 shadow-xs transition-colors hover:border-emerald-300 ${
+            activeTab === 'guru' ? 'border-emerald-400 ring-1 ring-emerald-200' : 'border-slate-200'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              Jumlah Guru
+            </span>
+            <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
+              {masterStats.jumlahGuru}
+            </span>
+            <span className="text-xs font-medium text-slate-500">pendidik</span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-slate-600 tabular-nums">
+            PNS {masterStats.guruPns} · PPPK {masterStats.guruPppk} · GTT {masterStats.guruHonorer}
+            {masterStats.guruKeluarCount > 0 && ` · ${masterStats.guruKeluarCount} keluar/mutasi`}
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('tendik'); setSearchTerm(''); }}
+          className={`text-left bg-white border rounded-lg p-4 shadow-xs transition-colors hover:border-amber-300 ${
+            activeTab === 'tendik' ? 'border-amber-400 ring-1 ring-amber-200' : 'border-slate-200'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              Jumlah Tendik
+            </span>
+            <UserCheck className="w-4 h-4 text-amber-600 shrink-0" />
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
+              {masterStats.jumlahTendik}
+            </span>
+            <span className="text-xs font-medium text-slate-500">pegawai TU</span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-slate-600 tabular-nums">
+            ASN {masterStats.tendikAsn} · Non-ASN/Honorer {masterStats.tendikHonorer}
+            {masterStats.tendikKeluarCount > 0 && ` · ${masterStats.tendikKeluarCount} keluar/mutasi`}
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('siswa'); setSearchTerm(''); }}
+          className={`text-left bg-white border rounded-lg p-4 shadow-xs transition-colors hover:border-blue-300 ${
+            activeTab === 'siswa' ? 'border-blue-400 ring-1 ring-blue-200' : 'border-slate-200'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              Jumlah Peserta Didik
+            </span>
+            <GraduationCap className="w-4 h-4 text-blue-600 shrink-0" />
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
+              {masterStats.jumlahSiswa}
+            </span>
+            <span className="text-xs font-medium text-slate-500">siswa aktif</span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-slate-600 tabular-nums">
+            Tersebar pada {masterStats.jumlahRombel} rombel aktif
+            {masterStats.siswaKeluarCount > 0 && ` · ${masterStats.siswaKeluarCount} mutasi/keluar`}
+          </div>
+        </button>
+
+        <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              Profil Lengkap (GTK)
+            </span>
+            <span className="text-[11px] font-mono font-semibold text-slate-600 tabular-nums">
+              {masterStats.gtkBiodataLengkapCount}/{masterStats.totalGtk} siap
+            </span>
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
+              {masterStats.persenProfilLengkap}%
+            </span>
+            <span className="text-xs font-medium text-slate-500">
+              rata-rata kelengkapan
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-emerald-600 transition-all duration-300"
+              style={{ width: `${Math.min(100, Math.max(0, masterStats.persenProfilLengkap))}%` }}
+            />
+          </div>
+          <div className="mt-1.5 text-[10.5px] text-slate-500 tabular-nums">
+            Guru {masterStats.guruLengkapPct}% · Tendik {masterStats.tendikLengkapPct}% · Foto {masterStats.gtkFotoCount}/{masterStats.totalGtk}
+          </div>
+        </div>
+      </div>
+
+      {masterFeedback && (
+        <div
+          className={`flex items-center justify-between gap-3 px-4 py-2.5 rounded-lg border text-xs ${
+            masterFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : masterFeedback.type === 'error'
+              ? 'bg-rose-50 border-rose-200 text-rose-900'
+              : 'bg-slate-50 border-slate-200 text-slate-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {masterFeedback.type === 'success' ? (
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-slate-600 shrink-0" />
+            )}
+            <span className="font-medium">{masterFeedback.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMasterFeedback(null)}
+            className="text-slate-400 hover:text-slate-700 p-0.5"
+            title="Tutup notifikasi"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Filter, Search & View Controls */}
       <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
         <div className="relative flex-1">
@@ -1097,6 +1639,20 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
               </select>
             </div>
 
+            {/* Filter Keaktifan Siswa */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-medium">Keaktifan:</span>
+              <select
+                value={filterKeaktifanSiswa}
+                onChange={e => setFilterKeaktifanSiswa(e.target.value as 'SEMUA' | 'AKTIF' | 'KELUAR')}
+                className="px-2 py-1.5 border border-slate-200 rounded bg-white text-slate-700 font-medium"
+              >
+                <option value="SEMUA">Semua</option>
+                <option value="AKTIF">Aktif</option>
+                <option value="KELUAR">Keluar / Mutasi / Berhenti</option>
+              </select>
+            </div>
+
             {/* Toggle Table View Mode */}
             <div className="inline-flex p-0.5 bg-slate-100 rounded border border-slate-200">
               <button
@@ -1150,6 +1706,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
               </select>
             </div>
 
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-medium">Keaktifan:</span>
+              <select
+                value={filterKeaktifanGtk}
+                onChange={e => setFilterKeaktifanGtk(e.target.value as 'SEMUA' | 'AKTIF' | 'KELUAR')}
+                className="px-2 py-1.5 border border-slate-200 rounded bg-white text-slate-700 font-medium"
+              >
+                <option value="SEMUA">Semua</option>
+                <option value="AKTIF">Aktif</option>
+                <option value="KELUAR">Keluar / Mutasi / Meninggal</option>
+              </select>
+            </div>
+
             {/* Toggle Table View Mode for Guru */}
             <div className="inline-flex p-0.5 bg-slate-100 rounded border border-slate-200">
               <button
@@ -1200,6 +1769,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                 <option value="SEMUA">L & P</option>
                 <option value="L">Laki-laki (L)</option>
                 <option value="P">Perempuan (P)</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-medium">Keaktifan:</span>
+              <select
+                value={filterKeaktifanGtk}
+                onChange={e => setFilterKeaktifanGtk(e.target.value as 'SEMUA' | 'AKTIF' | 'KELUAR')}
+                className="px-2 py-1.5 border border-slate-200 rounded bg-white text-slate-700 font-medium"
+              >
+                <option value="SEMUA">Semua</option>
+                <option value="AKTIF">Aktif</option>
+                <option value="KELUAR">Keluar / Mutasi / Meninggal</option>
               </select>
             </div>
 
@@ -1263,18 +1845,30 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                       const ttl = s.tempatTanggalLahir || (s.tempatLahir && s.tanggalLahir ? `${s.tempatLahir}, ${s.tanggalLahir}` : (s.tempatLahir || '-'));
                       const rombel = s.rombelSaatIni || s.kelas;
                       const isPip = s.layakPip === 'Ya' || s.penerimaKip === 'Ya';
+                      const exited = isSiswaExitedRecord(s);
+                      const exitSummary = formatSiswaExitSummary(s);
 
                       return (
-                        <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                        <tr key={s.id} className={`transition-colors ${exited ? 'bg-slate-50/70 text-slate-500 hover:bg-slate-100/70' : 'hover:bg-slate-50/80'}`}>
                           <td className="py-3 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                              <span>{s.nama}</span>
+                            <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                              <span className={exited ? 'text-slate-600' : 'text-slate-900'}>{s.nama}</span>
                               {s.nik && <span className="text-[10px] text-slate-400 font-normal">({s.nik})</span>}
+                              {exited && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                  {s.jenisKeluar || s.status}
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-slate-500 mt-0.5">
                               Ortu: <span className="font-medium text-slate-700">{s.namaAyah || s.namaOrtu || '-'}</span>
                             </div>
+                            {exited && (
+                              <div className="text-[10.5px] text-rose-700 mt-0.5 font-medium">
+                                {exitSummary}{s.tanggalKeluar ? ` (${s.tanggalKeluar})` : ''}
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-3 font-mono font-semibold text-slate-800">{s.nipd || s.nis || '-'}</td>
                           <td className="py-3 px-3 text-center">
@@ -1335,6 +1929,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
 
                               {canEdit && (
                                 <>
+                                  {exited && (
+                                    <button
+                                      onClick={() => handleRestoreActive('siswa', s)}
+                                      className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded transition-colors"
+                                      title="Aktifkan Kembali Siswa"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                   <button
                                     onClick={() => handleOpenSiswaModal(s)}
                                     className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
@@ -1343,11 +1946,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                                     <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                   <button
-                                    onClick={() => handleDeleteSiswa(s.id, s.nama)}
+                                    onClick={() => openSiswaExitModal(s)}
                                     className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
-                                    title="Hapus Data Siswa"
+                                    title="Catat Keluar / Mutasi / Hapus Siswa"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <UserMinus className="w-3.5 h-3.5" />
                                   </button>
                                 </>
                               )}
@@ -1515,13 +2118,42 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                       const gtkType: 'guru' | 'tendik' = activeTab === 'tendik' ? 'tendik' : 'guru';
                       const status = g.statusKepegawaian || g.status || 'PNS';
                       const mapel = g.mataPelajaran || g.mapel || g.tugasTambahan || '-';
+                      const exited = isGtkExitedRecord(g);
+                      const exitSummary = formatGtkExitSummary(g);
                       return (
-                        <tr key={g.id} className="hover:bg-slate-50/80 transition-colors">
+                        <tr key={g.id} className={`transition-colors ${exited ? 'bg-slate-50/70 text-slate-500 hover:bg-slate-100/70' : 'hover:bg-slate-50/80'}`}>
                           <td className="py-3 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-bold text-slate-900">{g.nama}</div>
-                            <div className="text-[10px] text-slate-500 font-mono">
-                              NUPTK: {g.nuptk || '-'}
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-10 rounded border border-slate-200 bg-slate-100 shrink-0 overflow-hidden flex items-center justify-center">
+                                {g.fotoUrl ? (
+                                  <img
+                                    src={resolveDirectImageUrl(g.fotoUrl)}
+                                    alt={g.nama}
+                                    className="w-full h-full object-cover object-top"
+                                  />
+                                ) : (
+                                  <Camera className="w-3.5 h-3.5 text-slate-300" />
+                                )}
+                              </div>
+                              <div>
+                                <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                                  <span className={exited ? 'text-slate-600' : 'text-slate-900'}>{g.nama}</span>
+                                  {exited && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                      {g.statusAktif}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                  NUPTK: {g.nuptk || '-'}
+                                </div>
+                                {exited && (
+                                  <div className="text-[10.5px] text-rose-700 font-medium mt-0.5">
+                                    {exitSummary}{g.tanggalKeluar ? ` (${g.tanggalKeluar})` : ''}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="py-3 px-4 font-mono font-semibold text-slate-800">
@@ -1583,6 +2215,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
 
                               {canEdit && (
                                 <>
+                                  {exited && (
+                                    <button
+                                      onClick={() => handleRestoreActive(gtkType, g)}
+                                      className="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded transition-colors"
+                                      title={`Aktifkan Kembali ${gtkType === 'tendik' ? 'Tendik' : 'Guru'}`}
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                   <button
                                     onClick={() => handleOpenGuruModal(g, gtkType)}
                                     className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
@@ -1591,11 +2232,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                                     <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                   <button
-                                    onClick={() => handleDeleteGtk(g.id, g.nama, gtkType)}
+                                    onClick={() => openGtkExitModal(g, gtkType)}
                                     className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
-                                    title={gtkType === 'tendik' ? 'Hapus Data Tendik' : 'Hapus Data Guru'}
+                                    title={gtkType === 'tendik' ? 'Catat Keluar / Mutasi / Hapus Tendik' : 'Catat Keluar / Mutasi / Hapus Guru'}
                                   >
-                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <UserMinus className="w-3.5 h-3.5" />
                                   </button>
                                 </>
                               )}
@@ -2148,6 +2789,38 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
             </div>
 
             <div className="p-5 overflow-y-auto space-y-4">
+              {isSiswaExitedRecord(inspectSiswa) && (
+                <div className="bg-rose-50 border border-rose-200 rounded-lg p-3.5 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-rose-800 text-xs">
+                      Status Peserta Didik: {inspectSiswa.jenisKeluar || inspectSiswa.status}
+                    </span>
+                    {inspectSiswa.tanggalKeluar && (
+                      <span className="font-mono text-[11px] text-rose-700 tabular-nums">
+                        Tanggal: {inspectSiswa.tanggalKeluar}
+                      </span>
+                    )}
+                  </div>
+                  {inspectSiswa.tujuanMutasi && (
+                    <div className="text-slate-800">
+                      <span className="text-slate-500">Mutasi Ke:</span>{' '}
+                      <span className="font-semibold">{inspectSiswa.tujuanMutasi}</span>
+                    </div>
+                  )}
+                  {inspectSiswa.alasanKeluar && (
+                    <div className="text-slate-800">
+                      <span className="text-slate-500">Alasan / Keterangan:</span>{' '}
+                      <span className="font-medium">{inspectSiswa.alasanKeluar}</span>
+                    </div>
+                  )}
+                  {inspectSiswa.nomorSuratMutasi && (
+                    <div className="text-slate-700 font-mono text-[11px]">
+                      No. Surat Pindah: {inspectSiswa.nomorSuratMutasi}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
                 <div>
                   <span className="text-slate-400 text-[10px] block">Rombel / Kelas:</span>
@@ -2266,15 +2939,28 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="bg-white rounded-lg shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden text-xs flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-slate-50">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                  {inspectGuru.type === 'tendik'
-                    ? 'Data Pokok Tenaga Kependidikan (GTK Tendik)'
-                    : 'Data Pokok Pendidik (GTK Guru)'}
-                </span>
-                <h3 className="font-bold text-slate-900 text-sm">
-                  {inspectGuru.data.nama} {inspectGuru.data.nip ? `(${inspectGuru.data.nip})` : ''}
-                </h3>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-14 rounded border border-slate-200 bg-white overflow-hidden shrink-0 flex items-center justify-center">
+                  {inspectGuru.data.fotoUrl ? (
+                    <img
+                      src={resolveDirectImageUrl(inspectGuru.data.fotoUrl)}
+                      alt={inspectGuru.data.nama}
+                      className="w-full h-full object-cover object-top"
+                    />
+                  ) : (
+                    <Camera className="w-4 h-4 text-slate-300" />
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                    {inspectGuru.type === 'tendik'
+                      ? 'Data Pokok Tenaga Kependidikan (GTK Tendik)'
+                      : 'Data Pokok Pendidik (GTK Guru)'}
+                  </span>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    {inspectGuru.data.nama} {inspectGuru.data.nip ? `(${inspectGuru.data.nip})` : ''}
+                  </h3>
+                </div>
               </div>
               <button onClick={() => setInspectGuru(null)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
@@ -2282,6 +2968,33 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
             </div>
 
             <div className="p-5 overflow-y-auto space-y-4">
+              {isGtkExitedRecord(inspectGuru.data) && (
+                <div className="bg-rose-50 border border-rose-200 rounded-lg p-3.5 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-rose-800 text-xs">
+                      Status Keaktifan: {inspectGuru.data.statusAktif}
+                    </span>
+                    {inspectGuru.data.tanggalKeluar && (
+                      <span className="font-mono text-[11px] text-rose-700 tabular-nums">
+                        Tanggal: {inspectGuru.data.tanggalKeluar}
+                      </span>
+                    )}
+                  </div>
+                  {inspectGuru.data.tujuanMutasi && (
+                    <div className="text-slate-800">
+                      <span className="text-slate-500">Tujuan Mutasi:</span>{' '}
+                      <span className="font-semibold">{inspectGuru.data.tujuanMutasi}</span>
+                    </div>
+                  )}
+                  {inspectGuru.data.alasanKeluar && (
+                    <div className="text-slate-800">
+                      <span className="text-slate-500">Keterangan / Alasan:</span>{' '}
+                      <span className="font-medium">{inspectGuru.data.alasanKeluar}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-emerald-50/50 p-3 rounded-lg border border-emerald-200">
                 <div>
                   <span className="text-slate-400 text-[10px] block">NUPTK:</span>
@@ -2394,18 +3107,34 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
             </div>
 
             <div className="flex justify-between items-center px-5 py-3 border-t border-slate-100 bg-slate-50">
-              {onSelectForLetter ? (
-                <button
-                  onClick={() => {
-                    onSelectForLetter({ type: inspectGuru.type, data: inspectGuru.data });
-                    setInspectGuru(null);
-                  }}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-xs flex items-center gap-1.5"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Buat Surat Perintah Tugas (SPT)</span>
-                </button>
-              ) : <div />}
+              <div className="flex items-center gap-2">
+                {onOpenProfileCard && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = inspectGuru.data.id;
+                      setInspectGuru(null);
+                      onOpenProfileCard(targetId);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-xs flex items-center gap-1.5"
+                  >
+                    <Contact2 className="w-3.5 h-3.5" />
+                    <span>Buka Kartu Profil</span>
+                  </button>
+                )}
+                {onSelectForLetter && (
+                  <button
+                    onClick={() => {
+                      onSelectForLetter({ type: inspectGuru.type, data: inspectGuru.data });
+                      setInspectGuru(null);
+                    }}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-xs flex items-center gap-1.5"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Buat Surat Perintah Tugas (SPT)</span>
+                  </button>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -2913,6 +3642,62 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
               {/* TAB 1: IDENTITAS & KEPEGAWAIAN */}
               {activeGuruModalTab === 'kepegawaian' && (
                 <div className="space-y-3.5">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70">
+                    <div className="w-16 h-20 rounded border border-slate-300 bg-white overflow-hidden shrink-0 flex items-center justify-center">
+                      {guruFormData.fotoUrl ? (
+                        <img
+                          src={resolveDirectImageUrl(guruFormData.fotoUrl)}
+                          alt="Pas Foto GTK"
+                          className="w-full h-full object-cover object-top"
+                        />
+                      ) : (
+                        <Camera className="w-5 h-5 text-slate-300" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2 w-full">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold cursor-pointer inline-flex items-center gap-1.5">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{guruFormData.fotoUrl ? 'Ganti Pas Foto' : 'Upload Pas Foto'}</span>
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp,image/jpg"
+                            className="hidden"
+                            onChange={async ev => {
+                              const file = ev.target.files?.[0];
+                              if (!file) return;
+                              try {
+                                const compressed = await compressGtkPhotoFileToDataUrl(file);
+                                setGuruFormData(prev => ({ ...prev, fotoUrl: compressed }));
+                              } catch {
+                                // Ignore invalid image file
+                              }
+                            }}
+                          />
+                        </label>
+                        {guruFormData.fotoUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setGuruFormData(prev => ({ ...prev, fotoUrl: '' }))}
+                            className="px-2.5 py-1.5 border border-rose-200 text-rose-700 hover:bg-rose-50 rounded font-medium"
+                          >
+                            Hapus Foto
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="url"
+                        value={
+                          guruFormData.fotoUrl && !guruFormData.fotoUrl.startsWith('data:image/')
+                            ? guruFormData.fotoUrl
+                            : ''
+                        }
+                        onChange={e => setGuruFormData({ ...guruFormData, fotoUrl: e.target.value })}
+                        placeholder="Atau tempel link URL / Google Drive pas foto..."
+                        className="w-full px-2.5 py-1 border border-slate-300 rounded bg-white text-[11px] font-mono"
+                      />
+                    </div>
+                  </div>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     <div className="col-span-2">
                       <label className="block text-slate-700 font-semibold mb-1">Nama Lengkap beserta Gelar *:</label>
@@ -3403,6 +4188,315 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
                       ? 'Tambahkan Tendik'
                       : 'Tambahkan Guru'}
                   </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======================= MODAL KELUAR / MUTASI / HAPUS DATA ======================= */}
+      {exitModalState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-lg shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden text-xs flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
+                  {exitModalState.entity === 'siswa'
+                    ? 'Pencatatan Siswa Keluar / Hapus'
+                    : exitModalState.entity === 'tendik'
+                    ? 'Pencatatan Tendik Keluar / Hapus'
+                    : 'Pencatatan Guru Keluar / Hapus'}
+                </span>
+                <h3 className="font-bold text-slate-900 text-sm">
+                  {exitModalState.record.nama}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExitModalState(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmExitOrDelete} className="p-5 overflow-y-auto space-y-4">
+              <div>
+                <label className="block font-bold text-slate-800 mb-2">
+                  Pilih Jenis Status Keluar / Tindakan
+                </label>
+                {exitModalState.entity === 'siswa' ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { id: 'mutasi' as ExitModeSiswa, label: 'Mutasi / Pindah' },
+                      { id: 'berhenti' as ExitModeSiswa, label: 'Berhenti Sekolah' },
+                      { id: 'hapus_permanen' as ExitModeSiswa, label: 'Hapus Permanen' }
+                    ].map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() =>
+                          setExitModalState(prev =>
+                            prev ? { ...prev, mode: opt.id, error: '' } : prev
+                          )
+                        }
+                        className={`px-2.5 py-2 rounded border text-center font-semibold transition-colors ${
+                          exitModalState.mode === opt.id
+                            ? opt.id === 'hapus_permanen'
+                              ? 'bg-rose-600 text-white border-rose-600'
+                              : 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'mutasi' as ExitModeGtk, label: 'Mutasi' },
+                      { id: 'meninggal' as ExitModeGtk, label: 'Meninggal Dunia' },
+                      { id: 'berhenti' as ExitModeGtk, label: 'Berhenti' },
+                      { id: 'hapus_permanen' as ExitModeGtk, label: 'Hapus Permanen' }
+                    ].map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() =>
+                          setExitModalState(prev =>
+                            prev ? { ...prev, mode: opt.id, error: '' } : prev
+                          )
+                        }
+                        className={`px-2 py-2 rounded border text-center font-semibold transition-colors ${
+                          exitModalState.mode === opt.id
+                            ? opt.id === 'hapus_permanen'
+                              ? 'bg-rose-600 text-white border-rose-600'
+                              : 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {exitModalState.mode === 'hapus_permanen' ? (
+                <div className="p-3.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Konfirmasi Hapus Permanen</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    Data <strong>{exitModalState.record.nama}</strong> akan dihapus permanen dari database tanpa riwayat arsip. Jika orang yang bersangkutan mutasi, berhenti, atau meninggal dunia, pilih status keluar di atas agar riwayat tetap tersimpan.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      {exitModalState.mode === 'meninggal'
+                        ? 'Tanggal Meninggal Dunia'
+                        : exitModalState.mode === 'mutasi'
+                        ? 'Tanggal Efektif / Mutasi'
+                        : 'Tanggal Berhenti'}
+                    </label>
+                    <input
+                      type="date"
+                      value={exitModalState.tanggalKeluar}
+                      onChange={e =>
+                        setExitModalState(prev =>
+                          prev ? { ...prev, tanggalKeluar: e.target.value, error: '' } : prev
+                        )
+                      }
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono"
+                    />
+                  </div>
+
+                  {exitModalState.mode === 'mutasi' && (
+                    <>
+                      <div>
+                        <label className="block text-slate-700 font-semibold mb-1">
+                          {exitModalState.entity === 'siswa'
+                            ? 'Mutasi ke Sekolah Mana? (Wajib diisi)'
+                            : 'Mutasi ke Sekolah / Instansi Mana? (Wajib diisi)'}
+                        </label>
+                        <input
+                          type="text"
+                          placeholder={
+                            exitModalState.entity === 'siswa'
+                              ? 'Contoh: SMAN 5 Surabaya / MAN Kota Surabaya'
+                              : 'Contoh: SMAN 2 Surabaya / Cabang Dinas Pendidikan Wilayah Surabaya'
+                          }
+                          value={exitModalState.tujuanMutasi}
+                          onChange={e =>
+                            setExitModalState(prev =>
+                              prev ? { ...prev, tujuanMutasi: e.target.value, error: '' } : prev
+                            )
+                          }
+                          className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                        />
+                      </div>
+
+                      {exitModalState.entity === 'siswa' && (
+                        <div>
+                          <label className="block text-slate-700 font-semibold mb-1">
+                            Nomor Surat Keterangan Pindah (Opsional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Contoh: 421.3/102/101.6.1.9/2026"
+                            value={exitModalState.nomorSuratMutasi}
+                            onChange={e =>
+                              setExitModalState(prev =>
+                                prev ? { ...prev, nomorSuratMutasi: e.target.value, error: '' } : prev
+                              )
+                            }
+                            className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono"
+                          />
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-slate-700 font-semibold mb-1">
+                          Keterangan / Alasan Mutasi (Opsional)
+                        </label>
+                        <textarea
+                          rows={2}
+                          placeholder={
+                            exitModalState.entity === 'siswa'
+                              ? 'Contoh: Mengikuti kepindahan tugas/domisili orang tua'
+                              : 'Contoh: SK Mutasi Gubernur Jatim / Alih tugas kedinasan'
+                          }
+                          value={exitModalState.alasanKeluar}
+                          onChange={e =>
+                            setExitModalState(prev =>
+                              prev ? { ...prev, alasanKeluar: e.target.value, error: '' } : prev
+                            )
+                          }
+                          className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {exitModalState.mode === 'meninggal' && (
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        Catatan / Keterangan Tambahan (Opsional)
+                      </label>
+                      <textarea
+                        rows={2}
+                        placeholder="Contoh: Meninggal dunia karena sakit, surat keterangan kematian terlampir"
+                        value={exitModalState.alasanKeluar}
+                        onChange={e =>
+                          setExitModalState(prev =>
+                            prev ? { ...prev, alasanKeluar: e.target.value, error: '' } : prev
+                          )
+                        }
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                      />
+                    </div>
+                  )}
+
+                  {exitModalState.mode === 'berhenti' && (
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        {exitModalState.entity === 'siswa'
+                          ? 'Alasan Berhenti Sekolah (Wajib diisi)'
+                          : 'Alasan Berhenti / Pensiun (Wajib diisi)'}
+                      </label>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(exitModalState.entity === 'siswa'
+                          ? [
+                              'Faktor Ekonomi Keluarga',
+                              'Bekerja / Membantu Orang Tua',
+                              'Masalah Kesehatan',
+                              'Pindah Pendidikan Nonformal / Paket C',
+                              'Alasan Pribadi / Keluarga'
+                            ]
+                          : [
+                              'Pensiun / Batas Usia Pensiun',
+                              'Mengundurkan Diri',
+                              'Habis Masa Kontrak',
+                              'Alih Profesi / Tugas Lain'
+                            ]
+                        ).map(preset => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() =>
+                              setExitModalState(prev =>
+                                prev ? { ...prev, alasanKeluar: preset, error: '' } : prev
+                              )
+                            }
+                            className={`px-2 py-1 rounded border text-[11px] transition-colors ${
+                              exitModalState.alasanKeluar === preset
+                                ? 'bg-blue-50 border-blue-300 text-blue-800 font-semibold'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                      <textarea
+                        rows={2}
+                        placeholder={
+                          exitModalState.entity === 'siswa'
+                            ? 'Tuliskan penjelasan rinci alasan siswa berhenti sekolah...'
+                            : 'Tuliskan alasan atau nomor SK berhenti/pensiun...'
+                        }
+                        value={exitModalState.alasanKeluar}
+                        onChange={e =>
+                          setExitModalState(prev =>
+                            prev ? { ...prev, alasanKeluar: e.target.value, error: '' } : prev
+                          )
+                        }
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {exitModalState.error && (
+                <div className="px-3 py-2 rounded bg-rose-50 border border-rose-200 text-rose-700 font-medium flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{exitModalState.error}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setExitModalState(null)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded font-medium hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className={`px-4 py-2 rounded font-bold text-white flex items-center gap-1.5 shadow-xs ${
+                    exitModalState.mode === 'hapus_permanen'
+                      ? 'bg-rose-600 hover:bg-rose-700'
+                      : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
+                >
+                  {exitModalState.mode === 'hapus_permanen' ? (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Hapus Permanen</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Simpan Status Keluar</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

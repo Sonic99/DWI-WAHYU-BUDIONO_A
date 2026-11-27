@@ -20,7 +20,17 @@ import {
   Sparkles,
   GraduationCap,
   IdCard,
-  BadgeCheck
+  BadgeCheck,
+  FileCheck2,
+  BookMarked,
+  BookOpenCheck,
+  DoorOpen,
+  ClipboardCheck,
+  Network,
+  ScrollText,
+  CalendarCheck,
+  Contact2,
+  MapPin
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -92,6 +102,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
       roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek'] as UserRole[]
     },
     {
+      id: 'kartu-gtk',
+      label: 'Kartu Master Guru & Tendik',
+      shortLabel: 'Kartu GTK',
+      icon: Contact2,
+      badgeFull: 'Profil & Foto',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'struktur-organisasi',
+      label: 'Struktur Organisasi Sekolah',
+      shortLabel: 'Struktur Org',
+      icon: Network,
+      badgeFull: 'Bagan & Aturan',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'kehadiran-pegawai',
+      label: 'Kehadiran Guru & Karyawan',
+      shortLabel: 'Presensi GTK',
+      icon: CalendarCheck,
+      badgeFull: 'E-Presensi BKD',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'buku-induk',
+      label: 'Buku Induk Siswa & Kurikulum',
+      shortLabel: 'Buku Induk',
+      icon: BookMarked,
+      badgeFull: 'Kurikulum',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek'] as UserRole[]
+    },
+    {
+      id: 'buku-induk-rapor',
+      label: 'Detail Nilai Rapor Per Semester',
+      shortLabel: 'Rapor Induk',
+      icon: BookOpenCheck,
+      badgeFull: 'Smt 1–6',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
       id: 'kartu-ujian',
       label: 'Kartu Peserta Ulangan',
       shortLabel: 'Kartu Ujian',
@@ -105,6 +155,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
       shortLabel: 'Panitia',
       icon: BadgeCheck,
       badgeFull: 'ID Petugas',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'izin-ujian',
+      label: 'Surat Ijin Masuk Ujian',
+      shortLabel: 'Ijin Ujian',
+      icon: FileCheck2,
+      badgeFull: 'Terlambat',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'tempel-ruang',
+      label: 'Tempel Nomor Ruang Ujian',
+      shortLabel: 'Tempel Ruang',
+      icon: DoorOpen,
+      badgeFull: 'Per Tingkat',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'denah-ruang',
+      label: 'Denah Ruang Kelas SMAN 9',
+      shortLabel: 'Denah Ruang',
+      icon: MapPin,
+      badgeFull: 'R-1 s.d. R-22',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'daftar-hadir-ujian',
+      label: 'Daftar Hadir Siswa & Pengawas',
+      shortLabel: 'Daftar Hadir',
+      icon: ClipboardCheck,
+      badgeFull: 'Sesuai Jadwal',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'berita-acara-ujian',
+      label: 'Berita Acara Ulangan (PSAS)',
+      shortLabel: 'Berita Acara',
+      icon: ScrollText,
+      badgeFull: 'Form & Blanko',
       roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
     },
     {

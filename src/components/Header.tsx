@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User, SchoolProfile, SuratMasuk, SuratKeluar } from '../types';
+import { resolveDirectImageUrl } from './ExamCardBarcode';
 import { 
   ShieldCheck, 
   Plus, 
@@ -134,9 +135,17 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={() => onNavigate('dashboard')} 
           className="flex items-center gap-2 cursor-pointer group"
         >
-          <div className="w-7 h-7 md:w-8 md:h-8 rounded-lg bg-gradient-to-br from-amber-400 via-amber-500 to-amber-600 flex items-center justify-center font-black text-slate-950 text-xs md:text-sm shadow-md group-hover:shadow-amber-500/20 transition-all">
-            9
-          </div>
+          <img
+            src={resolveDirectImageUrl(profile.sekolahLogoUrl) || '/logo-sman9.png'}
+            alt={`Logo ${profile.namaSekolah}`}
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (!img.src.endsWith('/logo-sman9.png')) {
+                img.src = '/logo-sman9.png';
+              }
+            }}
+            className="w-7 h-7 md:w-8 md:h-8 rounded-md bg-white p-0.5 object-contain shadow-md shrink-0 group-hover:scale-105 transition-transform"
+          />
           <div className="flex flex-col">
             <span className="text-xs md:text-sm font-bold tracking-tight text-white group-hover:text-amber-400 transition-colors">
               SIP-TU SMAN 9

@@ -176,13 +176,90 @@ export const WebAddressModal: React.FC<WebAddressModalProps> = ({
             </div>
           </div>
 
+          {/* Card 4: Direct Portal Link Surat Ijin Masuk Ujian */}
+          <div className="p-3.5 rounded-lg bg-amber-50/70 border border-amber-200 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-amber-950 flex items-center gap-1.5">
+                <QrCode className="w-3.5 h-3.5 text-amber-700" />
+                <span>Link Mandiri Form Surat Ijin Masuk Ujian (Pengawas/Panitia)</span>
+              </div>
+              <span className="text-[10px] bg-amber-200 text-amber-950 font-bold px-1.5 py-0.5 rounded">
+                Ujian
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 p-1.5 bg-white rounded border border-amber-200 font-mono text-[11px] text-slate-700 break-all">
+              <span className="flex-1 select-all truncate">{`${currentOrigin}/?view=izin-ujian`}</span>
+              <button
+                onClick={() => copyToClipboard(`${currentOrigin}/?view=izin-ujian`, 'izin-ujian')}
+                className="px-2 py-0.5 border border-amber-300 hover:bg-amber-100 text-amber-950 rounded text-[10px] font-sans font-semibold flex items-center gap-1 shrink-0"
+              >
+                {copiedKey === 'izin-ujian' ? (
+                  <Check className="w-3 h-3 text-emerald-600" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+                <span>{copiedKey === 'izin-ujian' ? 'Tersalin' : 'Salin'}</span>
+              </button>
+              <a
+                href={`${currentOrigin}/?view=izin-ujian`}
+                target="_blank"
+                rel="noreferrer"
+                className="p-1 text-amber-800 hover:bg-amber-100 rounded shrink-0"
+                title="Buka link form ijin ujian di tab baru"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+            <p className="text-[10px] text-amber-900">
+              * Langsung membuka Form Input + Preview Cetak Bersebelahan serta cetak Blanko Kosong (6 Suket/Halaman).
+            </p>
+          </div>
+
+          {/* Card 5: Direct Portal Link Struktur Organisasi */}
+          <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                <School className="w-3.5 h-3.5 text-slate-700" />
+                <span>Tautan Bagan Struktur Organisasi Sekolah</span>
+              </div>
+              <span className="text-[10px] bg-slate-200 text-slate-800 font-semibold px-1.5 py-0.5 rounded">
+                Bagan
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 p-1.5 bg-white rounded border border-slate-200 font-mono text-[11px] text-slate-700 break-all">
+              <span className="flex-1 select-all truncate">{`${currentOrigin}/?view=struktur-organisasi`}</span>
+              <button
+                onClick={() => copyToClipboard(`${currentOrigin}/?view=struktur-organisasi`, 'struktur-org')}
+                className="px-2 py-0.5 border border-slate-300 hover:bg-slate-100 text-slate-800 rounded text-[10px] font-sans font-semibold flex items-center gap-1 shrink-0"
+              >
+                {copiedKey === 'struktur-org' ? (
+                  <Check className="w-3 h-3 text-emerald-600" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+                <span>{copiedKey === 'struktur-org' ? 'Tersalin' : 'Salin'}</span>
+              </button>
+              <a
+                href={`${currentOrigin}/?view=struktur-organisasi`}
+                target="_blank"
+                rel="noreferrer"
+                className="p-1 text-slate-700 hover:bg-slate-100 rounded shrink-0"
+                title="Buka bagan struktur organisasi di tab baru"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </div>
+
           {/* Instant QR Verification Preview Info */}
-          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg flex items-center gap-3">
-            <QrCode className="w-7 h-7 text-amber-700 shrink-0" />
-            <div className="text-[11px] text-amber-950">
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center gap-3">
+            <Share2 className="w-6 h-6 text-blue-700 shrink-0" />
+            <div className="text-[11px] text-slate-800">
               <span className="font-bold">Dukungan Akses Perangkat Mobile:</span>
               <p className="text-slate-600 mt-0.5">
-                Alamat web aplikasi dapat dibuka langsung di smartphone atau tablet tanpa perlu instalasi aplikasi tambahan.
+                Alamat web aplikasi &amp; link mandiri pengawas dapat dibuka langsung di HP, tablet, atau laptop tanpa instalasi tambahan.
               </p>
             </div>
           </div>

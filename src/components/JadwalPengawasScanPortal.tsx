@@ -15,6 +15,14 @@ import {
   formatSlotAssignmentBadgeText
 } from '../utils/pengawasSchedule';
 import { ExamCardBarcode } from './ExamCardBarcode';
+import { PrintTypographyBar } from './PrintTypographyBar';
+import {
+  PrintTypographySettings,
+  getStoredPrintTypography,
+  saveStoredPrintTypography,
+  getPrintTypographyStyleVars,
+  getScopedPrintTypographyCss
+} from '../utils/printTypography';
 import {
   QrCode,
   ZoomIn,
@@ -180,9 +188,22 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
   onSelectProctor,
   onClose
 }) => {
-  const [zoomPct, setZoomPct] = useState<number>(isStandalone ? 100 : 100);
+  const [zoomPct, setZoomPct] = useState<number>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 640 ? 55 : isStandalone ? 100 : 100
+  );
   const [filterKind, setFilterKind] = useState<'all' | 'jaga' | 'cad'>('all');
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [typography, setTypography] = useState<PrintTypographySettings>(() =>
+    getStoredPrintTypography('sman9_jadwal_pengawas_typo_v1', {
+      fontFamily: 'inter',
+      lineSpacing: 'nyaman',
+      fontScalePct: 100
+    })
+  );
+  const handleUpdateTypography = (next: PrintTypographySettings) => {
+    setTypography(next);
+    saveStoredPrintTypography('sman9_jadwal_pengawas_typo_v1', next);
+  };
 
   const effectiveSlots = slots.length > 0 ? slots : DEFAULT_JADWAL_PENGAWAS_SLOTS;
   const summary = useMemo(
@@ -243,7 +264,20 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
   };
 
   const content = (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden">
+    <div className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden print:shadow-none print:border-0 print:max-h-none print:overflow-visible">
+      <style>{`
+        ${getScopedPrintTypographyCss('.jpsp-sheet-scope')}
+        @media print {
+          @page { size: A4 portrait; margin: 10mm; }
+          .jpsp-zoom-wrap {
+            zoom: 1 !important;
+            max-width: 100% !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+          }
+        }
+      `}</style>
       {/* Top Header */}
       <div className="no-print px-5 py-3.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -401,10 +435,16 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
             </button>
           </div>
 
+          <PrintTypographyBar
+            value={typography}
+            onChange={handleUpdateTypography}
+            compact
+          />
+
           <button
             type="button"
             onClick={() => window.print()}
-            className="px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] flex items-center gap-1"
+            className="px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] flex items-center gap-1 whitespace-nowrap"
           >
             <Printer className="w-3.5 h-3.5" />
             <span>Cetak Jadwal</span>
@@ -413,10 +453,13 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
       </div>
 
       {/* Scrollable + Zoomable Schedule Canvas */}
-      <div className="flex-1 overflow-auto p-5 bg-slate-100/70">
+      <div className="flex-1 overflow-auto p-5 bg-slate-100/70 print:p-0 print:bg-white print:overflow-visible">
         <div
-          style={{ zoom: zoomPct / 100 }}
-          className="mx-auto max-w-4xl bg-white border border-slate-300 rounded-xl p-5 shadow-sm print:shadow-none print:border-0"
+          style={{
+            zoom: zoomPct / 100,
+            ...getPrintTypographyStyleVars(typography)
+          }}
+          className="jpsp-zoom-wrap jpsp-sheet-scope pt-stack mx-auto max-w-4xl bg-white border border-slate-300 rounded-xl p-5 shadow-sm print:shadow-none print:border-0"
         >
           {/* Formal Header & QR Shortcut Info */}
           <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b-2 border-slate-800">
@@ -488,18 +531,21 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
           </div>
 
           {/* Crystal-Clear 8-Day × 2-Session Personal Schedule Table */}
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full border-collapse border border-slate-800 text-xs">
+          <div className="overflow-x-auto print:overflow-visible">
+            <table
+              className="pt-table w-full border-collapse border border-slate-800"
+              style={{ fontSize: `${(12 * typography.fontScalePct) / 100}px` }}
+            >
               <thead>
                 <tr className="bg-slate-900 text-white">
-                  <th className="border border-slate-700 px-3 py-2 text-center w-10">No</th>
-                  <th className="border border-slate-700 px-3 py-2 text-left min-w-[140px]">
+                  <th className="border border-slate-700 text-center w-10">No</th>
+                  <th className="border border-slate-700 text-left min-w-[140px]">
                     Hari &amp; Tanggal
                   </th>
-                  <th className="border border-slate-700 px-3 py-2 text-left w-[38%]">
+                  <th className="border border-slate-700 text-left w-[38%]">
                     Sesi 1 (Kelas X &amp; XI)
                   </th>
-                  <th className="border border-slate-700 px-3 py-2 text-left w-[38%]">
+                  <th className="border border-slate-700 text-left w-[38%]">
                     Sesi 2 (Kelas XII)
                   </th>
                 </tr>
@@ -507,19 +553,19 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
               <tbody>
                 {dayGroups.map((dg, idx) => (
                   <tr key={dg.dayKey} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}>
-                    <td className="border border-slate-400 px-3 py-2.5 text-center font-mono font-bold text-slate-700 tabular-nums align-top">
+                    <td className="border border-slate-400 text-center font-mono font-bold text-slate-700 tabular-nums align-top">
                       {idx + 1}
                     </td>
-                    <td className="border border-slate-400 px-3 py-2.5 align-top">
+                    <td className="border border-slate-400 align-top">
                       <div className="font-extrabold text-slate-950 text-sm">{dg.hari}</div>
                       <div className="font-mono text-xs font-semibold text-slate-600">
                         {dg.tanggal}
                       </div>
                     </td>
-                    <td className="border border-slate-400 px-3 py-2.5 align-top">
+                    <td className="border border-slate-400 align-top">
                       {renderSlotCell(dg.sesi1)}
                     </td>
-                    <td className="border border-slate-400 px-3 py-2.5 align-top">
+                    <td className="border border-slate-400 align-top">
                       {renderSlotCell(dg.sesi2)}
                     </td>
                   </tr>
@@ -529,10 +575,13 @@ export const JadwalPengawasScanPortal: React.FC<JadwalPengawasScanPortalProps> =
           </div>
 
           {/* Keterangan & Summary */}
-          <div className="mt-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 space-y-1">
+          <div
+            className="pt-prose p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 space-y-1"
+            style={{ fontSize: `${(12 * typography.fontScalePct) / 100}px` }}
+          >
             <div className="font-bold text-slate-950">Keterangan &amp; Ketentuan Pengawasan:</div>
             {DEFAULT_JADWAL_PENGAWAS_KETERANGAN.map((line, i) => (
-              <div key={i}>{line}</div>
+              <div key={i} className="pt-para">{line}</div>
             ))}
           </div>
         </div>

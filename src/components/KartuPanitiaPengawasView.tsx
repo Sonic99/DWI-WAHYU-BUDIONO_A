@@ -16,7 +16,8 @@ import {
 import {
   PemprovJatimLogo,
   SchoolStampSvg,
-  KepalaSekolahSignatureSvg
+  KepalaSekolahSignatureSvg,
+  Sman9SurabayaLogoSvg
 } from './OfficialStamps';
 import { ExamCardBarcode, resolveDirectImageUrl } from './ExamCardBarcode';
 import {
@@ -509,7 +510,8 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
   const [filterKategori, setFilterKategori] = useState<'all' | 'panitia' | 'pengawas'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [printMode, setPrintMode] = useState<'filtered' | 'selected'>('filtered');
+  const [printMode, setPrintMode] = useState<'filtered' | 'selected' | 'individual'>('filtered');
+  const [individualPrintId, setIndividualPrintId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(
     null
   );
@@ -937,11 +939,15 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
   }, [items, filterKategori, searchQuery]);
 
   const cardsToPrint = useMemo(() => {
+    if (printMode === 'individual') {
+      const target = items.find(i => i.id === individualPrintId) || filteredItems[0] || items[0];
+      return target ? [target] : [];
+    }
     if (printMode === 'selected' && selectedIds.length > 0) {
       return items.filter(i => selectedIds.includes(i.id));
     }
     return filteredItems;
-  }, [printMode, selectedIds, items, filteredItems]);
+  }, [printMode, individualPrintId, selectedIds, items, filteredItems]);
 
   const printPages = useMemo(() => {
     const perPage = Math.max(1, settings.layoutPerPage || 6);
@@ -1467,9 +1473,72 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
     }
     appendAuditLog(
       'CETAK_KARTU_PANITIA_PENGAWAS',
-      `Mencetak ${cardsToPrint.length} Kartu Panitia & Pengawas (${settings.namaUjian}).`
+      `Mencetak ${cardsToPrint.length} Kartu Panitia & Pengawas (${
+        printMode === 'individual' ? 'Individu' : 'Massal'
+      } • ${settings.namaUjian}).`
     );
     window.print();
+  };
+
+  const handlePrintIndividualItem = (item: PanitiaPengawasItem) => {
+    setIndividualPrintId(item.id);
+    setPrintMode('individual');
+    setPreviewOutputMode('kartu');
+    notify(
+      'success',
+      `Mode Cetak Individu aktif untuk ${item.nama}. Pratinjau di bawah menampilkan 1 kartu ini.`
+    );
+  };
+
+  const applyLayoutPreset = (preset: 'standar_id' | 'standar_6' | 'a4_4_orang') => {
+    if (preset === 'a4_4_orang') {
+      onUpdateSettings({
+        ...settings,
+        ukuranKertas: 'A4',
+        orientasiCetak: 'portrait',
+        jumlahKolom: 2,
+        layoutPerPage: 4,
+        lebarKartuMm: undefined,
+        tinggiKartuMm: undefined,
+        lebarKartuPanitiaMm: undefined,
+        tinggiKartuPanitiaMm: undefined,
+        lebarKartuPengawasMm: undefined,
+        tinggiKartuPengawasMm: undefined
+      });
+      notify('success', 'Tata letak diatur ke Kertas A4 untuk 4 Orang per lembar (2×2).');
+      return;
+    }
+    if (preset === 'standar_id') {
+      onUpdateSettings({
+        ...settings,
+        ukuranKertas: 'F4',
+        orientasiCetak: 'portrait',
+        jumlahKolom: 3,
+        layoutPerPage: 9,
+        lebarKartuMm: 58,
+        tinggiKartuMm: 95,
+        lebarKartuPanitiaMm: undefined,
+        tinggiKartuPanitiaMm: undefined,
+        lebarKartuPengawasMm: undefined,
+        tinggiKartuPengawasMm: undefined
+      });
+      notify('success', 'Ukuran kartu diatur ke Standar ID Card (58×95 mm • 3 kolom).');
+      return;
+    }
+    onUpdateSettings({
+      ...settings,
+      ukuranKertas: 'A4',
+      orientasiCetak: 'portrait',
+      jumlahKolom: 2,
+      layoutPerPage: 6,
+      lebarKartuMm: undefined,
+      tinggiKartuMm: undefined,
+      lebarKartuPanitiaMm: undefined,
+      tinggiKartuPanitiaMm: undefined,
+      lebarKartuPengawasMm: undefined,
+      tinggiKartuPengawasMm: undefined
+    });
+    notify('success', 'Tata letak diatur ke Standar A4 (6 Orang per lembar).');
   };
 
   const resolvePetugasBarcodeValue = (item: PanitiaPengawasItem): string => {
@@ -3361,18 +3430,18 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
               </button>
             </div>
 
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-slate-500 font-medium">Cetak:</span>
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-slate-500 font-medium">Mode Cetak:</span>
               <button
                 type="button"
                 onClick={() => setPrintMode('filtered')}
                 className={`px-2.5 py-1 rounded border font-semibold ${
                   printMode === 'filtered'
                     ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-white text-slate-700 border-slate-300'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                 }`}
               >
-                Semua Tampil ({filteredItems.length})
+                Massal Semua ({filteredItems.length})
               </button>
               <button
                 type="button"
@@ -3380,11 +3449,41 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
                 className={`px-2.5 py-1 rounded border font-semibold ${
                   printMode === 'selected'
                     ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-white text-slate-700 border-slate-300'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                 }`}
               >
-                Terpilih ({selectedIds.length})
+                Massal Terpilih ({selectedIds.length})
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!individualPrintId && (filteredItems[0] || items[0])) {
+                    setIndividualPrintId((filteredItems[0] || items[0]).id);
+                  }
+                  setPrintMode('individual');
+                  setPreviewOutputMode('kartu');
+                }}
+                className={`px-2.5 py-1 rounded border font-semibold ${
+                  printMode === 'individual'
+                    ? 'bg-slate-900 text-amber-400 border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Individu (1 Orang)
+              </button>
+              {printMode === 'individual' && items.length > 0 && (
+                <select
+                  value={individualPrintId || filteredItems[0]?.id || items[0]?.id || ''}
+                  onChange={e => setIndividualPrintId(e.target.value)}
+                  className="px-2 py-1 border border-slate-300 rounded bg-white font-semibold max-w-[200px]"
+                >
+                  {items.map(it => (
+                    <option key={it.id} value={it.id}>
+                      {it.nomorTugas} — {it.nama}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -3775,14 +3874,29 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
                         </div>
                       </td>
                       <td className="px-3 py-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(item.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50"
-                          title="Hapus baris"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handlePrintIndividualItem(item)}
+                            className={`px-2 py-1 rounded border text-[10.5px] font-bold flex items-center gap-1 transition-colors ${
+                              printMode === 'individual' && individualPrintId === item.id
+                                ? 'bg-slate-900 text-amber-400 border-slate-900'
+                                : 'bg-blue-50 hover:bg-blue-100 text-blue-800 border-blue-200'
+                            }`}
+                            title="Cetak individu (khusus 1 petugas ini saja)"
+                          >
+                            <Printer className="w-3 h-3" />
+                            <span>Cetak 1</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItem(item.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded hover:bg-rose-50"
+                            title="Hapus baris"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -3990,12 +4104,14 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
                         <div className="shrink-0">
                           {profile.logoType === 'custom' && profile.logoUrl ? (
                             <img
-                              src={profile.logoUrl}
+                              src={resolveDirectImageUrl(profile.logoUrl)}
                               alt="Logo"
                               className={`${fontScale.logo} object-contain`}
                             />
+                          ) : profile.logoType === 'default' || profile.logoType === 'default_vector' ? (
+                            <Sman9SurabayaLogoSvg customUrl={profile.sekolahLogoUrl} className={fontScale.logo} />
                           ) : (
-                            <PemprovJatimLogo className={fontScale.logo} />
+                            <PemprovJatimLogo customUrl={profile.pemprovLogoUrl} className={fontScale.logo} />
                           )}
                         </div>
                         <div className="flex-1 text-center leading-tight min-w-0">
@@ -4886,6 +5002,102 @@ export const KartuPanitiaPengawasView: React.FC<KartuPanitiaPengawasViewProps> =
                           {sz}
                         </button>
                       ))}
+                    </div>
+
+                    {/* Quick Standar vs A4 4-Orang Presets */}
+                    <div className="inline-flex flex-wrap rounded-md border border-amber-300 bg-amber-50/60 p-0.5 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => applyLayoutPreset('standar_id')}
+                        className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                          (settings.lebarKartuMm === 58 && settings.tinggiKartuMm === 95) ||
+                          (settings.lebarKartuPengawasMm === 58 &&
+                            settings.tinggiKartuPengawasMm === 95)
+                            ? 'bg-slate-900 text-amber-400'
+                            : 'text-slate-700 hover:bg-amber-100'
+                        }`}
+                        title="Ukuran ID Card Standar 58×95 mm (3 kolom)"
+                      >
+                        Standar ID (58×95)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyLayoutPreset('standar_6')}
+                        className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                          settings.ukuranKertas === 'A4' &&
+                          settings.orientasiCetak === 'portrait' &&
+                          settings.jumlahKolom === 2 &&
+                          settings.layoutPerPage === 6 &&
+                          !isValidCardMm(settings.lebarKartuMm, 40)
+                            ? 'bg-slate-900 text-amber-400'
+                            : 'text-slate-700 hover:bg-amber-100'
+                        }`}
+                        title="Standar Kertas A4 isi 6 Orang per lembar (2×3)"
+                      >
+                        Standar A4 (6 Orang)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyLayoutPreset('a4_4_orang')}
+                        className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                          settings.ukuranKertas === 'A4' &&
+                          settings.orientasiCetak === 'portrait' &&
+                          settings.jumlahKolom === 2 &&
+                          settings.layoutPerPage === 4 &&
+                          !isValidCardMm(settings.lebarKartuMm, 40) &&
+                          !isValidCardMm(settings.lebarKartuPanitiaMm, 40) &&
+                          !isValidCardMm(settings.lebarKartuPengawasMm, 40)
+                            ? 'bg-emerald-700 text-white'
+                            : 'text-emerald-900 hover:bg-emerald-100'
+                        }`}
+                        title="Jadikan Kertas A4 untuk 4 Orang per lembar (2×2 besar & jelas)"
+                      >
+                        A4 (4 Orang / Hal)
+                      </button>
+                    </div>
+
+                    {/* Quick Individual vs Mass Scope Switch */}
+                    <div className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50/70 p-0.5 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setPrintMode('filtered')}
+                        className={`px-2 py-0.5 rounded font-bold ${
+                          printMode !== 'individual'
+                            ? 'bg-blue-700 text-white'
+                            : 'text-blue-900 hover:bg-blue-100'
+                        }`}
+                      >
+                        Massal ({printMode === 'selected' ? selectedIds.length : filteredItems.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!individualPrintId && (filteredItems[0] || items[0])) {
+                            setIndividualPrintId((filteredItems[0] || items[0]).id);
+                          }
+                          setPrintMode('individual');
+                        }}
+                        className={`px-2 py-0.5 rounded font-bold ${
+                          printMode === 'individual'
+                            ? 'bg-slate-900 text-amber-400'
+                            : 'text-blue-900 hover:bg-blue-100'
+                        }`}
+                      >
+                        Individu (1)
+                      </button>
+                      {printMode === 'individual' && items.length > 0 && (
+                        <select
+                          value={individualPrintId || filteredItems[0]?.id || items[0]?.id || ''}
+                          onChange={e => setIndividualPrintId(e.target.value)}
+                          className="px-1.5 py-0.5 rounded border border-blue-300 bg-white font-semibold text-slate-900 max-w-[165px]"
+                        >
+                          {items.map(it => (
+                            <option key={it.id} value={it.id}>
+                              {it.nama}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                   </>
                 )}

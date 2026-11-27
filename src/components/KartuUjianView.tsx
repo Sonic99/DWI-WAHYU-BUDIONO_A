@@ -5,6 +5,7 @@ import {
   KartuUjianSettings,
   User,
   JadwalUjianItem,
+  JadwalUlanganRepoItem,
   CustomCardTheme,
   CardEmbossStyle,
   CardAccentPattern
@@ -13,13 +14,15 @@ import { initialKartuUjianSettings } from '../data/initialData';
 import {
   PemprovJatimLogo,
   SchoolStampSvg,
-  KepalaSekolahSignatureSvg
+  KepalaSekolahSignatureSvg,
+  Sman9SurabayaLogoSvg
 } from './OfficialStamps';
 import {
   ExamCardBarcode,
   resolveDirectImageUrl,
   resolveStudentTemplateUrl
 } from './ExamCardBarcode';
+import { AturKelompokRuangSiswaModal } from './AturKelompokRuangSiswaModal';
 import {
   CARD_EMBOSS_OPTIONS,
   CARD_PATTERN_OPTIONS,
@@ -48,7 +51,13 @@ import {
   extractSessionBaseName,
   resolveEffectiveSiswaSesi,
   resolveScheduleTimeForStudent,
-  alignJadwalListToSesi
+  alignJadwalListToSesi,
+  getStoredJadwalUlanganRepo,
+  saveStoredJadwalUlanganRepo,
+  ensureCurrentJadwalArchivedInRepo,
+  createJadwalRepoSnapshotFromSettings,
+  computeJadwalSignature,
+  cloneJadwalItems
 } from '../services/storageService';
 import {
   IdCard,
@@ -84,7 +93,14 @@ import {
   Pencil,
   Check,
   X,
-  RefreshCw
+  RefreshCw,
+  Archive,
+  Save,
+  Copy,
+  BookmarkCheck,
+  ChevronDown,
+  ChevronUp,
+  FolderOpen
 } from 'lucide-react';
 
 interface KartuUjianViewProps {
@@ -288,7 +304,8 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
   const [filterRuang, setFilterRuang] = useState('all');
   const [filterFoto, setFilterFoto] = useState<'all' | 'has_foto' | 'no_foto'>('all');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [printMode, setPrintMode] = useState<'filtered' | 'selected'>('filtered');
+  const [printMode, setPrintMode] = useState<'filtered' | 'selected' | 'individual'>('filtered');
+  const [individualPrintId, setIndividualPrintId] = useState<string | null>(null);
 
   // Auto-assign session & room draft state
   const [autoAssignSesiMode, setAutoAssignSesiMode] = useState<string>('rotate');
@@ -320,6 +337,24 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
   const batchPhotoInputRef = useRef<HTMLInputElement>(null);
   const excelJadwalInputRef = useRef<HTMLInputElement>(null);
   const excelPesertaLinkInputRef = useRef<HTMLInputElement>(null);
+
+  // Repositori Jadwal Ulangan (agar jadwal baru tidak menimpa jadwal lama)
+  const [jadwalRepo, setJadwalRepo] = useState<JadwalUlanganRepoItem[]>(() =>
+    getStoredJadwalUlanganRepo(settings)
+  );
+  const [repoNameInput, setRepoNameInput] = useState<string>(() =>
+    `${settings.namaUjian || 'Jadwal Ulangan'} (${settings.semester || 'Gasal'} ${settings.tahunPelajaran || '2026/2027'})`.trim()
+  );
+  const [repoNoteInput, setRepoNoteInput] = useState<string>('');
+  const [repoSearchQuery, setRepoSearchQuery] = useState<string>('');
+  const [applyIncludeMetaAndSesi, setApplyIncludeMetaAndSesi] = useState<boolean>(false);
+  const [expandedRepoId, setExpandedRepoId] = useState<string | null>(null);
+  const [renamingRepoId, setRenamingRepoId] = useState<string | null>(null);
+  const [renamingRepoValue, setRenamingRepoValue] = useState<string>('');
+  const [confirmDeleteRepoId, setConfirmDeleteRepoId] = useState<string | null>(null);
+  const [isRoomGroupModalOpen, setIsRoomGroupModalOpen] = useState<boolean>(false);
+  const [roomGroupInitialRoom, setRoomGroupInitialRoom] = useState<string | undefined>(undefined);
+  const [confirmResetRuangTarget, setConfirmResetRuangTarget] = useState<'none' | 'panel' | 'bar'>('none');
 
   const activeSiswa = useMemo(
     () => siswaList.filter(s => s.status === 'Aktif' || !s.status),
@@ -397,6 +432,11 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
   }, [activeSiswa, searchQuery, filterKelas, filterSesi, filterRuang, filterFoto, settings.sesiTersedia]);
 
   const cardsToPrint = useMemo(() => {
+    if (printMode === 'individual') {
+      const target =
+        activeSiswa.find(s => s.id === individualPrintId) || filteredSiswa[0] || activeSiswa[0];
+      return target ? [target] : [];
+    }
     const base =
       printMode === 'selected' && selectedIds.length > 0
         ? activeSiswa.filter(s => selectedIds.includes(s.id))
@@ -426,7 +466,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
         numeric: true
       });
     });
-  }, [printMode, selectedIds, activeSiswa, filteredSiswa, settings.urutanCetak]);
+  }, [printMode, individualPrintId, selectedIds, activeSiswa, filteredSiswa, settings.urutanCetak]);
 
   // Paginate cards cleanly into print sheets (optionally breaking page when room changes)
   const printPages = useMemo(() => {
@@ -436,7 +476,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
     if (settings.pisahHalamanPerRuang) {
       const grouped = new Map<string, Siswa[]>();
       cardsToPrint.forEach(s => {
-        const room = (s.ruangUjian || '').trim() || `${settings.defaultRuangPrefix}01`;
+        const room = (s.ruangUjian || '').trim() || 'Belum Diatur';
         if (!grouped.has(room)) grouped.set(room, []);
         grouped.get(room)!.push(s);
       });
@@ -464,6 +504,29 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
     () => settings.jadwalUjian ?? initialKartuUjianSettings.jadwalUjian ?? [],
     [settings.jadwalUjian]
   );
+
+  const currentJadwalSig = useMemo(() => computeJadwalSignature(jadwalList), [jadwalList]);
+  const matchedSavedRepo = useMemo(
+    () => jadwalRepo.find(r => computeJadwalSignature(r.jadwalUjian) === currentJadwalSig) || null,
+    [jadwalRepo, currentJadwalSig]
+  );
+  const activeLinkedRepo = useMemo(
+    () => jadwalRepo.find(r => r.id === settings.activeJadwalRepoId) || null,
+    [jadwalRepo, settings.activeJadwalRepoId]
+  );
+  const filteredJadwalRepo = useMemo(() => {
+    const q = repoSearchQuery.toLowerCase().trim();
+    if (!q) return jadwalRepo;
+    return jadwalRepo.filter(
+      r =>
+        r.nama.toLowerCase().includes(q) ||
+        (r.namaUjian || '').toLowerCase().includes(q) ||
+        (r.semester || '').toLowerCase().includes(q) ||
+        (r.tahunPelajaran || '').toLowerCase().includes(q) ||
+        (r.keterangan || '').toLowerCase().includes(q) ||
+        r.jadwalUjian.some(j => j.mataPelajaran.toLowerCase().includes(q))
+    );
+  }, [jadwalRepo, repoSearchQuery]);
 
   const resolveSiswaPhotoSrc = (siswa: Siswa): string => {
     if (siswa.fotoUrl?.trim()) {
@@ -493,8 +556,9 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
       s => Boolean(s.fotoUrl?.trim() || settings.fotoLinkTemplate?.trim())
     ).length;
     const withSesi = activeSiswa.filter(s => Boolean(s.sesiUjian?.trim())).length;
+    const withRuang = activeSiswa.filter(s => Boolean((s.ruangUjian || '').trim())).length;
     const totalRooms = roomDistribution.rooms.length;
-    return { total, withNomor, withFoto, withSesi, totalRooms };
+    return { total, withNomor, withFoto, withSesi, withRuang, totalRooms };
   }, [activeSiswa, roomDistribution, settings.fotoLinkTemplate]);
 
   const notify = (type: 'success' | 'error', text: string) => {
@@ -588,11 +652,215 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
   };
 
   const handleResetDefaultJadwal = () => {
+    const { repo: nextRepo, archivedItem } = ensureCurrentJadwalArchivedInRepo(
+      settings,
+      jadwalRepo,
+      'Sebelum Reset 16 Mapel'
+    );
+    if (archivedItem) setJadwalRepo(nextRepo);
+
     onUpdateSettings({
       ...settings,
-      jadwalUjian: initialKartuUjianSettings.jadwalUjian || []
+      jadwalUjian: cloneJadwalItems(initialKartuUjianSettings.jadwalUjian || []),
+      activeJadwalRepoId: nextRepo.find(
+        r => computeJadwalSignature(r.jadwalUjian) === computeJadwalSignature(initialKartuUjianSettings.jadwalUjian || [])
+      )?.id
     });
-    notify('success', 'Jadwal ulangan kondisional dikembalikan ke contoh standar 16 mata pelajaran SMAN 9 Surabaya.');
+    notify(
+      'success',
+      archivedItem
+        ? `Jadwal sebelumnya diamankan ke repositori ("${archivedItem.nama}"), lalu jadwal dikembalikan ke contoh standar 16 mapel.`
+        : 'Jadwal ulangan kondisional dikembalikan ke contoh standar 16 mata pelajaran SMAN 9 Surabaya.'
+    );
+  };
+
+  // Simpan jadwal aktif sebagai item baru di repositori (tanpa menimpa jadwal lama)
+  const handleSaveCurrentJadwalAsNew = () => {
+    if (jadwalList.length === 0) {
+      notify('error', 'Tabel jadwal masih kosong. Tambahkan minimal 1 mata pelajaran sebelum menyimpan ke repositori.');
+      return;
+    }
+    const baseTitle =
+      repoNameInput.trim() ||
+      `${settings.namaUjian || 'Jadwal Ulangan'} (${settings.semester || 'Semester'} ${settings.tahunPelajaran || ''})`.trim();
+    const duplicateCount = jadwalRepo.filter(
+      r => r.nama.toLowerCase() === baseTitle.toLowerCase()
+    ).length;
+    const finalName = duplicateCount > 0 ? `${baseTitle} #${duplicateCount + 1}` : baseTitle;
+
+    const newEntry = createJadwalRepoSnapshotFromSettings(settings, {
+      nama: finalName,
+      keterangan: repoNoteInput.trim() || `${jadwalList.length} mata pelajaran`
+    });
+    const nextRepo = [newEntry, ...jadwalRepo];
+    setJadwalRepo(nextRepo);
+    saveStoredJadwalUlanganRepo(nextRepo);
+    onUpdateSettings({ ...settings, activeJadwalRepoId: newEntry.id });
+    setRepoNoteInput('');
+    appendAuditLog(
+      'SIMPAN_REPOSITORI_JADWAL',
+      `Menyimpan jadwal ulangan "${newEntry.nama}" (${newEntry.jadwalUjian.length} mapel) ke repositori.`
+    );
+    notify('success', `Jadwal "${newEntry.nama}" tersimpan di repositori tanpa menimpa jadwal lain.`);
+  };
+
+  // Perbarui entri repositori yang sedang tertaut (eksplisit oleh user)
+  const handleUpdateLinkedRepoItem = (targetId: string) => {
+    const target = jadwalRepo.find(r => r.id === targetId);
+    if (!target) return;
+    const nowIso = new Date().toISOString();
+    const updatedRepo = jadwalRepo.map(item =>
+      item.id === targetId
+        ? {
+            ...item,
+            namaUjian: settings.namaUjian,
+            tahunPelajaran: settings.tahunPelajaran,
+            semester: settings.semester,
+            judulBelakang: settings.judulBelakang,
+            catatanBelakang: settings.catatanBelakang,
+            maksJadwalBelakang: settings.maksJadwalBelakang,
+            tataLetakJadwalBelakang: settings.tataLetakJadwalBelakang,
+            sinkronWaktuJadwalDenganSesi: settings.sinkronWaktuJadwalDenganSesi !== false,
+            sesiTersedia: [...settings.sesiTersedia],
+            jadwalUjian: cloneJadwalItems(jadwalList),
+            isAutoArchive: false,
+            updatedAt: nowIso
+          }
+        : item
+    );
+    setJadwalRepo(updatedRepo);
+    saveStoredJadwalUlanganRepo(updatedRepo);
+    appendAuditLog(
+      'PERBARUI_REPOSITORI_JADWAL',
+      `Memperbarui snapshot repositori "${target.nama}" (${jadwalList.length} mapel).`
+    );
+    notify('success', `Perubahan jadwal berhasil diperbarui pada slot repositori "${target.nama}".`);
+  };
+
+  // Mulai susun jadwal baru dengan mengamankan jadwal lama terlebih dahulu ke repositori
+  const handleCreateFreshJadwal = () => {
+    const { repo: nextRepo, archivedItem } = ensureCurrentJadwalArchivedInRepo(
+      settings,
+      jadwalRepo,
+      'Arsip Sebelum Jadwal Baru'
+    );
+    if (archivedItem) setJadwalRepo(nextRepo);
+
+    const starterRow: JadwalUjianItem = {
+      id: `jdw-${Date.now()}`,
+      hariTanggal: 'Senin, ...',
+      waktu: '07.30 - 09.00',
+      mataPelajaran: 'Mata Pelajaran 1',
+      kondisiTarget: 'Semua',
+      kondisiNilai: '',
+      keterangan: ''
+    };
+    onUpdateSettings({
+      ...settings,
+      jadwalUjian: [starterRow],
+      activeJadwalRepoId: undefined
+    });
+    setRepoNameInput('');
+    setRepoNoteInput('');
+    notify(
+      'success',
+      archivedItem
+        ? `Jadwal lama diamankan ke repositori ("${archivedItem.nama}"). Silakan susun jadwal baru di tabel bawah.`
+        : 'Jadwal lama sudah aman di repositori. Lembar jadwal baru siap diisi.'
+    );
+  };
+
+  // Apply jadwal dari repositori (juga mengamankan draft aktif yang belum tersimpan agar tidak hilang)
+  const handleApplyRepoJadwal = (item: JadwalUlanganRepoItem) => {
+    const { repo: nextRepo, archivedItem } = ensureCurrentJadwalArchivedInRepo(
+      settings,
+      jadwalRepo,
+      'Cadangan Sebelum Apply'
+    );
+    if (archivedItem) setJadwalRepo(nextRepo);
+
+    const nextSettings: KartuUjianSettings = {
+      ...settings,
+      jadwalUjian: cloneJadwalItems(item.jadwalUjian),
+      judulBelakang: item.judulBelakang ?? settings.judulBelakang,
+      catatanBelakang: item.catatanBelakang ?? settings.catatanBelakang,
+      maksJadwalBelakang: item.maksJadwalBelakang ?? settings.maksJadwalBelakang,
+      tataLetakJadwalBelakang: item.tataLetakJadwalBelakang ?? settings.tataLetakJadwalBelakang,
+      sinkronWaktuJadwalDenganSesi:
+        item.sinkronWaktuJadwalDenganSesi !== undefined
+          ? item.sinkronWaktuJadwalDenganSesi
+          : settings.sinkronWaktuJadwalDenganSesi,
+      activeJadwalRepoId: item.id
+    };
+
+    if (applyIncludeMetaAndSesi) {
+      if (item.namaUjian) nextSettings.namaUjian = item.namaUjian;
+      if (item.semester) nextSettings.semester = item.semester;
+      if (item.tahunPelajaran) nextSettings.tahunPelajaran = item.tahunPelajaran;
+      if (item.sesiTersedia && item.sesiTersedia.length > 0) {
+        nextSettings.sesiTersedia = [...item.sesiTersedia];
+      }
+    }
+
+    onUpdateSettings(nextSettings);
+    appendAuditLog(
+      'APPLY_REPOSITORI_JADWAL',
+      `Menerapkan jadwal ulangan "${item.nama}" (${item.jadwalUjian.length} mapel) dari repositori.`
+    );
+    notify(
+      'success',
+      archivedItem
+        ? `Jadwal sebelumnya diamankan ke "${archivedItem.nama}". Berhasil menerapkan "${item.nama}" (${item.jadwalUjian.length} mapel).`
+        : `Berhasil menerapkan jadwal "${item.nama}" (${item.jadwalUjian.length} mapel) ke kartu ujian.`
+    );
+  };
+
+  const handleDuplicateRepoItem = (item: JadwalUlanganRepoItem) => {
+    const nowIso = new Date().toISOString();
+    const copy: JadwalUlanganRepoItem = {
+      ...item,
+      id: `jrepo-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      nama: `${item.nama} (Salinan)`,
+      isAutoArchive: false,
+      jadwalUjian: cloneJadwalItems(item.jadwalUjian),
+      sesiTersedia: item.sesiTersedia ? [...item.sesiTersedia] : [],
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    const nextRepo = [copy, ...jadwalRepo];
+    setJadwalRepo(nextRepo);
+    saveStoredJadwalUlanganRepo(nextRepo);
+    notify('success', `Salinan "${copy.nama}" ditambahkan ke repositori.`);
+  };
+
+  const handleSaveRenameRepoItem = (id: string) => {
+    const trimmed = renamingRepoValue.trim();
+    if (!trimmed) {
+      setRenamingRepoId(null);
+      return;
+    }
+    const nextRepo = jadwalRepo.map(r =>
+      r.id === id ? { ...r, nama: trimmed, updatedAt: new Date().toISOString() } : r
+    );
+    setJadwalRepo(nextRepo);
+    saveStoredJadwalUlanganRepo(nextRepo);
+    setRenamingRepoId(null);
+    notify('success', `Nama jadwal di repositori diubah menjadi "${trimmed}".`);
+  };
+
+  const handleDeleteRepoItem = (id: string) => {
+    const target = jadwalRepo.find(r => r.id === id);
+    const nextRepo = jadwalRepo.filter(r => r.id !== id);
+    setJadwalRepo(nextRepo);
+    saveStoredJadwalUlanganRepo(nextRepo);
+    setConfirmDeleteRepoId(null);
+    if (settings.activeJadwalRepoId === id) {
+      onUpdateSettings({ ...settings, activeJadwalRepoId: undefined });
+    }
+    if (target) {
+      appendAuditLog('HAPUS_REPOSITORI_JADWAL', `Menghapus entri repositori jadwal "${target.nama}".`);
+      notify('success', `Entri "${target.nama}" dihapus dari repositori.`);
+    }
   };
 
   const handleFill16Slots = () => {
@@ -630,12 +898,28 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
       const buffer = await file.arrayBuffer();
       const result = parseJadwalUjianExcel(buffer);
       if (result.success) {
-        onUpdateSettings({ ...settings, jadwalUjian: result.data });
+        const { repo: nextRepo, archivedItem } = ensureCurrentJadwalArchivedInRepo(
+          settings,
+          jadwalRepo,
+          'Sebelum Impor Excel'
+        );
+        if (archivedItem) setJadwalRepo(nextRepo);
+
+        onUpdateSettings({
+          ...settings,
+          jadwalUjian: result.data,
+          activeJadwalRepoId: undefined
+        });
         appendAuditLog(
           'IMPORT_JADWAL_KARTU_UJIAN',
           `Mengimpor ${result.data.length} baris jadwal kondisional dari ${file.name}.`
         );
-        notify('success', result.message);
+        notify(
+          'success',
+          archivedItem
+            ? `${result.message} Jadwal sebelumnya tetap diamankan di repositori ("${archivedItem.nama}").`
+            : result.message
+        );
       } else {
         notify('error', result.message);
       }
@@ -948,6 +1232,54 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
   const handleApplyRoomDivision = () => assignParticipants(false);
   const handleAutoGenerateAll = () => assignParticipants(true);
 
+  const handleResetPengaturanRuang = (scope: 'all' | 'selected') => {
+    if (scope === 'selected') {
+      if (selectedIds.length === 0) {
+        notify('error', 'Pilih minimal 1 peserta terlebih dahulu.');
+        return;
+      }
+      const selectedSet = new Set(selectedIds);
+      const updated = siswaList.map(s =>
+        selectedSet.has(s.id) ? { ...s, ruangUjian: '' } : s
+      );
+      onUpdateSiswa(updated);
+      setFilterRuang('all');
+      setConfirmResetRuangTarget('none');
+      appendAuditLog(
+        'RESET_RUANG_PESERTA_TERPILIH',
+        `Mengosongkan pengaturan ruang ${selectedIds.length} peserta ke awal (belum tersetting ruang).`
+      );
+      notify(
+        'success',
+        `Ruang ujian untuk ${selectedIds.length} peserta terpilih berhasil dikosongkan (belum tersetting ruang).`
+      );
+      return;
+    }
+
+    const updated = siswaList.map(s => ({ ...s, ruangUjian: '' }));
+    onUpdateSiswa(updated);
+    onUpdateSettings({
+      ...settings,
+      defaultRuangPrefix: initialKartuUjianSettings.defaultRuangPrefix,
+      kapasitasPerRuang: initialKartuUjianSettings.kapasitasPerRuang,
+      mulaiNomorRuang: initialKartuUjianSettings.mulaiNomorRuang,
+      modePembagianRuang: initialKartuUjianSettings.modePembagianRuang,
+      pisahHalamanPerRuang: initialKartuUjianSettings.pisahHalamanPerRuang
+    });
+    setKapasitasInput(String(initialKartuUjianSettings.kapasitasPerRuang));
+    setFilterRuang('all');
+    setSelectedIds([]);
+    setConfirmResetRuangTarget('none');
+    appendAuditLog(
+      'RESET_PENGATURAN_RUANG_NOL',
+      `Reset seluruh pengaturan ruang Kartu Peserta Siswa (${updated.length} siswa) kembali ke awal (0 / belum tersetting ruang).`
+    );
+    notify(
+      'success',
+      'Pengaturan ruang Kartu Peserta Siswa di-reset ke awal (0 / belum tersetting ruang).'
+    );
+  };
+
   const handleKapasitasChange = (valStr: string) => {
     setKapasitasInput(valStr);
     const parsed = parseInt(valStr, 10);
@@ -1214,9 +1546,59 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
   const handlePrintCards = () => {
     appendAuditLog(
       'CETAK_KARTU_UJIAN',
-      `Mencetak ${cardsToPrint.length} Kartu Peserta Ulangan (${settings.namaUjian}).`
+      `Mencetak ${cardsToPrint.length} Kartu Peserta Ulangan (${
+        printMode === 'individual' ? 'Individu' : 'Massal'
+      } • ${settings.namaUjian}).`
     );
     window.print();
+  };
+
+  const applyPesertaLayoutPreset = (preset: 'standar_id' | 'standar_6' | 'a4_4_orang') => {
+    if (preset === 'a4_4_orang') {
+      onUpdateSettings({
+        ...settings,
+        ukuranKertas: 'A4',
+        orientasiCetak: 'portrait',
+        jumlahKolom: 2,
+        layoutPerPage: 4,
+        lebarKartuMm: undefined,
+        tinggiKartuMm: undefined
+      });
+      setStatusMsg({
+        type: 'success',
+        text: 'Tata letak Kartu Peserta diatur ke Kertas A4 untuk 4 Orang per lembar (2×2).'
+      });
+      return;
+    }
+    if (preset === 'standar_id') {
+      onUpdateSettings({
+        ...settings,
+        ukuranKertas: 'F4',
+        orientasiCetak: 'portrait',
+        jumlahKolom: 3,
+        layoutPerPage: 9,
+        lebarKartuMm: 58,
+        tinggiKartuMm: 95
+      });
+      setStatusMsg({
+        type: 'success',
+        text: 'Ukuran Kartu Peserta diatur ke Standar ID Card (58×95 mm • 3 kolom).'
+      });
+      return;
+    }
+    onUpdateSettings({
+      ...settings,
+      ukuranKertas: 'A4',
+      orientasiCetak: 'portrait',
+      jumlahKolom: 2,
+      layoutPerPage: 6,
+      lebarKartuMm: undefined,
+      tinggiKartuMm: undefined
+    });
+    setStatusMsg({
+      type: 'success',
+      text: 'Tata letak Kartu Peserta diatur ke Standar A4 (6 Orang per lembar).'
+    });
   };
 
   const isCompactLayout = settings.layoutPerPage === 8;
@@ -1262,7 +1644,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
         </div>
 
         {/* Summary Metrics Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-100">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-3 border-t border-slate-100">
           <div className="bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
             <div className="text-[11px] font-medium text-slate-500">Total Peserta Aktif</div>
             <div className="text-lg font-bold text-slate-900 font-mono tabular-nums">
@@ -1285,6 +1667,19 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
             <div className="text-[11px] font-medium text-slate-500">Terjadwal Sesi Ujian</div>
             <div className="text-lg font-bold text-amber-700 font-mono tabular-nums">
               {stats.withSesi} <span className="text-xs font-sans font-normal text-slate-500">/ {stats.total}</span>
+            </div>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
+            <div className="text-[11px] font-medium text-slate-500">Tersetting Ruang</div>
+            <div
+              className={`text-lg font-bold font-mono tabular-nums ${
+                stats.withRuang > 0 ? 'text-indigo-700' : 'text-slate-500'
+              }`}
+            >
+              {stats.withRuang} <span className="text-xs font-sans font-normal text-slate-500">/ {stats.total}</span>
+            </div>
+            <div className="text-[10.5px] text-slate-500 tabular-nums">
+              {stats.totalRooms > 0 ? `${stats.totalRooms} ruang aktif` : 'Belum tersetting (0 ruang)'}
             </div>
           </div>
         </div>
@@ -1398,16 +1793,40 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleApplyRoomDivision}
-                  className="px-3.5 py-2 bg-slate-900 hover:bg-black text-amber-400 font-bold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
-                >
-                  <DoorOpen className="w-3.5 h-3.5" />
-                  <span>
-                    Terapkan Pembagian ({settings.kapasitasPerRuang} Anak/Ruang)
-                  </span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setConfirmResetRuangTarget(prev => (prev === 'panel' ? 'none' : 'panel'))
+                    }
+                    className="px-3 py-2 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 font-bold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors shrink-0 whitespace-nowrap"
+                    title="Reset pengaturan ruang & kosongkan penempatan ruang siswa kembali ke awal (0)"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Ruang (Nol)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoomGroupInitialRoom(filterRuang !== 'all' ? filterRuang : undefined);
+                      setIsRoomGroupModalOpen(true);
+                    }}
+                    className="px-3.5 py-2 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 font-bold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors shrink-0 whitespace-nowrap"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>Atur Kelompok Anak per Ruang</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleApplyRoomDivision}
+                    className="px-3.5 py-2 bg-slate-900 hover:bg-black text-amber-400 font-bold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors shrink-0 whitespace-nowrap"
+                  >
+                    <DoorOpen className="w-3.5 h-3.5" />
+                    <span>
+                      Terapkan Pembagian ({settings.kapasitasPerRuang} Anak/Ruang)
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end">
@@ -1534,6 +1953,39 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                     : 'Berlaku untuk seluruh peserta yang tampil di tabel'}
                 </div>
               </div>
+
+              {confirmResetRuangTarget === 'panel' && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                  <div className="text-rose-900">
+                    <strong>Konfirmasi Reset Pengaturan Ruang:</strong> Kolom Ruang Ujian peserta akan dikosongkan ke awal (<strong>0 / belum tersetting ruang</strong>) dan konfigurasi pembagian ruang kembali ke setelan awal.
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    {selectedIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleResetPengaturanRuang('selected')}
+                        className="px-3 py-1.5 bg-white hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold rounded-md whitespace-nowrap"
+                      >
+                        Kosongkan {selectedIds.length} Terpilih
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleResetPengaturanRuang('all')}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-md whitespace-nowrap"
+                    >
+                      Ya, Reset Semua ke Nol
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmResetRuangTarget('none')}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold rounded-md"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
@@ -1868,6 +2320,338 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                   <Upload className="w-3.5 h-3.5" />
                   <span>Impor Excel Jadwal</span>
                 </button>
+              </div>
+            </div>
+
+            {/* Repositori Jadwal Ulangan (Simpan, Arsip Otomatis, & Apply Kapan Saja) */}
+            <div className="border border-slate-200 rounded-lg bg-white overflow-hidden">
+              <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Archive className="w-4 h-4 text-slate-700 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 flex flex-wrap items-center gap-2">
+                      <span>Repositori Jadwal Ulangan ({jadwalRepo.length})</span>
+                      <span className="text-[11px] font-medium text-slate-500">
+                        ·{' '}
+                        {matchedSavedRepo ? (
+                          <span className="text-emerald-700 font-semibold">
+                            Jadwal aktif tersimpan ({matchedSavedRepo.nama})
+                          </span>
+                        ) : (
+                          <span className="text-amber-700 font-semibold">
+                            Perubahan editor belum disimpan ke repositori
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Simpan beberapa paket jadwal ulangan (PSAS, STS, US, Try Out) dan{' '}
+                      <strong className="text-slate-700">Apply</strong> kembali kapan saja tanpa menimpa jadwal lama.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleCreateFreshJadwal}
+                    className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 rounded-md font-semibold text-[11px] flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors"
+                    title="Amankan jadwal aktif ke repositori lalu mulai tabel jadwal baru"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Buat Jadwal Baru</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Form Simpan Jadwal Aktif ke Repositori */}
+              <div className="p-3 bg-slate-50/50 border-b border-slate-200 flex flex-col lg:flex-row lg:items-end gap-2.5">
+                <div className="flex-1 min-w-0">
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Nama Paket Jadwal untuk Disimpan ke Repositori
+                  </label>
+                  <input
+                    type="text"
+                    value={repoNameInput}
+                    onChange={e => setRepoNameInput(e.target.value)}
+                    placeholder="Contoh: PSAS Gasal 2026/2027 · STS Genap · Try Out XII"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white font-semibold"
+                  />
+                </div>
+                <div className="lg:w-56">
+                  <label className="block font-semibold text-slate-700 mb-1">Catatan (Opsional)</label>
+                  <input
+                    type="text"
+                    value={repoNoteInput}
+                    onChange={e => setRepoNoteInput(e.target.value)}
+                    placeholder="mis: 16 mapel reguler"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  {activeLinkedRepo && !matchedSavedRepo && (
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateLinkedRepoItem(activeLinkedRepo.id)}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-[11px] flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                      title={`Perbarui slot repositori "${activeLinkedRepo.nama}"`}
+                    >
+                      <BookmarkCheck className="w-3.5 h-3.5" />
+                      <span>Perbarui Slot Aktif</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveCurrentJadwalAsNew}
+                    className="px-3.5 py-1.5 bg-slate-900 hover:bg-black text-amber-400 rounded font-bold text-[11px] flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Simpan sebagai Baru di Repositori</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter & Opsi Apply */}
+              <div className="px-3 py-2 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white">
+                <div className="relative flex-1 max-w-xs">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={repoSearchQuery}
+                    onChange={e => setRepoSearchQuery(e.target.value)}
+                    placeholder="Cari jadwal di repositori..."
+                    className="w-full pl-8 pr-2.5 py-1 border border-slate-200 rounded text-[11px] bg-white"
+                  />
+                </div>
+                <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={applyIncludeMetaAndSesi}
+                    onChange={e => setApplyIncludeMetaAndSesi(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-blue-700 rounded"
+                  />
+                  <span>Saat Apply, ikut terapkan Nama Ujian, Semester & Set Sesi</span>
+                </label>
+              </div>
+
+              {/* Daftar Jadwal di Repositori */}
+              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto bg-white">
+                {filteredJadwalRepo.length === 0 ? (
+                  <div className="px-4 py-5 text-center text-slate-400 text-[11px]">
+                    {jadwalRepo.length === 0
+                      ? 'Belum ada jadwal di repositori. Klik "Simpan sebagai Baru di Repositori" untuk menyimpan jadwal saat ini.'
+                      : 'Tidak ada jadwal repositori yang cocok dengan pencarian.'}
+                  </div>
+                ) : (
+                  filteredJadwalRepo.map(item => {
+                    const isCurrentlyApplied =
+                      computeJadwalSignature(item.jadwalUjian) === currentJadwalSig;
+                    const isExpanded = expandedRepoId === item.id;
+                    const isRenaming = renamingRepoId === item.id;
+                    const isConfirmDelete = confirmDeleteRepoId === item.id;
+                    const formattedDate = (() => {
+                      try {
+                        return new Date(item.updatedAt).toLocaleString('id-ID', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        });
+                      } catch {
+                        return item.updatedAt;
+                      }
+                    })();
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`px-3.5 py-2.5 transition-colors ${
+                          isCurrentlyApplied ? 'bg-emerald-50/50' : 'hover:bg-slate-50/70'
+                        }`}
+                      >
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                          <div className="min-w-0 space-y-0.5">
+                            {isRenaming ? (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={renamingRepoValue}
+                                  onChange={e => setRenamingRepoValue(e.target.value)}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') handleSaveRenameRepoItem(item.id);
+                                    if (e.key === 'Escape') setRenamingRepoId(null);
+                                  }}
+                                  className="px-2 py-0.5 border border-blue-400 rounded text-xs font-semibold bg-white min-w-[220px]"
+                                  autoFocus
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveRenameRepoItem(item.id)}
+                                  className="p-1 text-emerald-700 hover:bg-emerald-100 rounded"
+                                  title="Simpan nama"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRenamingRepoId(null)}
+                                  className="p-1 text-slate-500 hover:bg-slate-100 rounded"
+                                  title="Batal"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-bold text-slate-900 truncate">
+                                  {item.nama}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRenamingRepoId(item.id);
+                                    setRenamingRepoValue(item.nama);
+                                  }}
+                                  className="p-0.5 text-slate-400 hover:text-blue-700 rounded"
+                                  title="Ubah nama paket jadwal"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                                {isCurrentlyApplied && (
+                                  <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Sedang Diterapkan</span>
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 tabular-nums">
+                              <span className="font-semibold text-slate-700">
+                                {item.jadwalUjian.length} Mapel
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span>
+                                {item.namaUjian || 'Ujian'} ({item.semester || '-'}{' '}
+                                {item.tahunPelajaran || '-'})
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span>Diperbarui {formattedDate}</span>
+                              {item.keterangan && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="truncate max-w-[260px]">{item.keterangan}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedRepoId(isExpanded ? null : item.id)
+                              }
+                              className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-medium text-slate-700 flex items-center gap-1 whitespace-nowrap shrink-0"
+                            >
+                              {isExpanded ? (
+                                <ChevronUp className="w-3 h-3" />
+                              ) : (
+                                <ChevronDown className="w-3 h-3" />
+                              )}
+                              <span>Lihat ({item.jadwalUjian.length})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateRepoItem(item)}
+                              className="p-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-slate-600"
+                              title="Duplikat jadwal ini"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                            {isConfirmDelete ? (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteRepoItem(item.id)}
+                                  className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10.5px] font-bold whitespace-nowrap"
+                                >
+                                  Konfirmasi Hapus
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteRepoId(null)}
+                                  className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10.5px] font-medium"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteRepoId(item.id)}
+                                className="p-1.5 bg-white hover:bg-rose-50 border border-slate-200 rounded text-slate-500 hover:text-rose-600"
+                                title="Hapus dari repositori"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleApplyRepoJadwal(item)}
+                              className={`px-3 py-1 rounded font-bold text-[11px] flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
+                                isCurrentlyApplied
+                                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+                              }`}
+                            >
+                              <FolderOpen className="w-3.5 h-3.5" />
+                              <span>{isCurrentlyApplied ? 'Terapkan Ulang' : 'Apply Jadwal'}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="mt-2 pt-2 border-t border-slate-200/80 overflow-x-auto">
+                            <table className="w-full text-left border-collapse text-[11px]">
+                              <thead>
+                                <tr className="text-slate-500 border-b border-slate-200">
+                                  <th className="py-1 pr-2 w-7">No</th>
+                                  <th className="py-1 pr-2">Hari / Tanggal</th>
+                                  <th className="py-1 pr-2">Waktu</th>
+                                  <th className="py-1 pr-2">Mata Pelajaran</th>
+                                  <th className="py-1">Target Kondisi</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {item.jadwalUjian.map((row, rIdx) => (
+                                  <tr key={`${item.id}-${row.id || rIdx}`}>
+                                    <td className="py-1 pr-2 font-mono text-slate-400 tabular-nums">
+                                      {rIdx + 1}
+                                    </td>
+                                    <td className="py-1 pr-2 text-slate-700">{row.hariTanggal}</td>
+                                    <td className="py-1 pr-2 font-mono text-slate-700 tabular-nums">
+                                      {row.waktu}
+                                    </td>
+                                    <td className="py-1 pr-2 font-semibold text-slate-900">
+                                      {row.mataPelajaran}
+                                    </td>
+                                    <td className="py-1 text-slate-600">
+                                      {row.kondisiTarget && row.kondisiTarget !== 'Semua'
+                                        ? `${row.kondisiTarget}: ${row.kondisiNilai || '-'}`
+                                        : 'Semua Peserta'}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -3357,7 +4141,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                     : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                 }`}
               >
-                Semua Terfilter ({filteredSiswa.length})
+                Massal Terfilter ({filteredSiswa.length})
               </button>
               <button
                 type="button"
@@ -3369,8 +4153,37 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                     : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                 }`}
               >
-                Terpilih ({selectedIds.length})
+                Massal Terpilih ({selectedIds.length})
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!individualPrintId && (filteredSiswa[0] || activeSiswa[0])) {
+                    setIndividualPrintId((filteredSiswa[0] || activeSiswa[0]).id);
+                  }
+                  setPrintMode('individual');
+                }}
+                className={`px-2.5 py-1 rounded border font-semibold ${
+                  printMode === 'individual'
+                    ? 'bg-slate-900 text-amber-400 border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Individu (1 Siswa)
+              </button>
+              {printMode === 'individual' && activeSiswa.length > 0 && (
+                <select
+                  value={individualPrintId || filteredSiswa[0]?.id || activeSiswa[0]?.id || ''}
+                  onChange={e => setIndividualPrintId(e.target.value)}
+                  className="px-2 py-1 border border-slate-300 rounded bg-white font-semibold max-w-[190px]"
+                >
+                  {activeSiswa.map(st => (
+                    <option key={st.id} value={st.id}>
+                      {st.nama} ({st.rombelSaatIni || st.kelas})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -3454,39 +4267,123 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
           </div>
 
           {/* Quick Room Filter & Distribution Summary */}
-          {roomDistribution.rooms.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100 text-[11px]">
+          <div className="pt-2 border-t border-slate-100 space-y-2 text-[11px]">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="font-semibold text-slate-500 mr-1 flex items-center gap-1">
                 <DoorOpen className="w-3.5 h-3.5 text-amber-600" />
                 Distribusi Ruang:
               </span>
               <button
                 type="button"
-                onClick={() => setFilterRuang('all')}
-                className={`px-2 py-0.5 rounded border font-semibold transition-colors ${
-                  filterRuang === 'all'
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
+                onClick={() => {
+                  setRoomGroupInitialRoom(filterRuang !== 'all' ? filterRuang : undefined);
+                  setIsRoomGroupModalOpen(true);
+                }}
+                className="px-2.5 py-0.5 rounded border border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0"
               >
-                Semua ({activeSiswa.length})
+                <Users className="w-3 h-3" />
+                <span>Atur Kelompok Anak/Ruang</span>
               </button>
-              {roomDistribution.rooms.map(({ room, count }) => (
+
+              {(roomDistribution.rooms.length > 0 ||
+                settings.kapasitasPerRuang !== initialKartuUjianSettings.kapasitasPerRuang ||
+                settings.defaultRuangPrefix !== initialKartuUjianSettings.defaultRuangPrefix ||
+                (settings.mulaiNomorRuang || 1) !== 1 ||
+                (settings.modePembagianRuang || 'sequential') !== 'sequential') && (
                 <button
-                  key={room}
                   type="button"
-                  onClick={() => setFilterRuang(room)}
-                  className={`px-2 py-0.5 rounded border font-mono font-semibold transition-colors ${
-                    filterRuang === room
-                      ? 'bg-amber-500 text-slate-950 border-amber-600'
-                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
+                  onClick={() =>
+                    setConfirmResetRuangTarget(prev => (prev === 'bar' ? 'none' : 'bar'))
+                  }
+                  className="px-2.5 py-0.5 rounded border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0"
+                  title="Reset pengaturan ruang & kosongkan penempatan ruang siswa kembali ke awal (0)"
                 >
-                  {room} ({count} anak)
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Reset Ruang (Nol)</span>
                 </button>
-              ))}
+              )}
+
+              {roomDistribution.rooms.length === 0 ? (
+                <span className="text-slate-600 font-medium px-2 py-0.5 bg-slate-100 border border-slate-200 rounded tabular-nums">
+                  0 Ruang (Belum tersetting ruang · {roomDistribution.unassignedCount} siswa belum memiliki ruang)
+                </span>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setFilterRuang('all')}
+                    className={`px-2 py-0.5 rounded border font-semibold transition-colors ${
+                      filterRuang === 'all'
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    Semua ({activeSiswa.length})
+                  </button>
+                  {roomDistribution.rooms.map(({ room, count }) => (
+                    <button
+                      key={room}
+                      type="button"
+                      onClick={() => setFilterRuang(room)}
+                      className={`px-2 py-0.5 rounded border font-mono font-semibold transition-colors ${
+                        filterRuang === room
+                          ? 'bg-amber-500 text-slate-950 border-amber-600'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {room} ({count} anak)
+                    </button>
+                  ))}
+                  {roomDistribution.unassignedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFilterRuang('__unassigned__')}
+                      className={`px-2 py-0.5 rounded border font-semibold transition-colors ${
+                        filterRuang === '__unassigned__'
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      Belum Diatur ({roomDistribution.unassignedCount})
+                    </button>
+                  )}
+                </>
+              )}
             </div>
-          )}
+
+            {confirmResetRuangTarget === 'bar' && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-rose-900">
+                  Reset pengaturan ruang &amp; kosongkan ruang ujian seluruh peserta kembali ke <strong>0 (belum tersetting)</strong>?
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {selectedIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleResetPengaturanRuang('selected')}
+                      className="px-2.5 py-1 bg-white hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold rounded"
+                    >
+                      Kosongkan {selectedIds.length} Terpilih
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleResetPengaturanRuang('all')}
+                    className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded"
+                  >
+                    Ya, Reset ke Nol
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetRuangTarget('none')}
+                    className="px-2 py-1 bg-white text-slate-700 border border-slate-300 rounded font-semibold"
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Editable Table */}
@@ -3585,9 +4482,33 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                         </div>
                       </td>
                       <td className="px-3 py-2">
-                        <div className="font-bold text-slate-900">{s.nama}</div>
-                        <div className="text-[11px] font-mono text-slate-500">
-                          NIS: {s.nis || s.nipd || '-'} • NISN: {s.nisn || '-'}
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="font-bold text-slate-900">{s.nama}</div>
+                            <div className="text-[11px] font-mono text-slate-500">
+                              NIS: {s.nis || s.nipd || '-'} • NISN: {s.nisn || '-'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIndividualPrintId(s.id);
+                              setPrintMode('individual');
+                              setStatusMsg({
+                                type: 'success',
+                                text: `Mode Cetak Individu aktif untuk ${s.nama}. Pratinjau di bawah hanya menampilkan 1 kartu ini.`
+                              });
+                            }}
+                            className={`px-1.5 py-0.5 rounded border text-[10px] font-bold flex items-center gap-1 shrink-0 transition-colors ${
+                              printMode === 'individual' && individualPrintId === s.id
+                                ? 'bg-slate-900 text-amber-400 border-slate-900'
+                                : 'bg-blue-50 hover:bg-blue-100 text-blue-800 border-blue-200'
+                            }`}
+                            title="Cetak individu (khusus 1 siswa ini)"
+                          >
+                            <Printer className="w-2.5 h-2.5" />
+                            <span>Cetak 1</span>
+                          </button>
                         </div>
                       </td>
                       <td className="px-3 py-2 font-semibold text-slate-700">{kelas}</td>
@@ -3654,7 +4575,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                           onChange={e =>
                             handleUpdateSiswaField(s.id, 'ruangUjian', e.target.value)
                           }
-                          placeholder={`${settings.defaultRuangPrefix}01`}
+                          placeholder="Belum diatur"
                           className="w-full px-2 py-1 border border-slate-300 rounded font-mono text-slate-900 bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
                         />
                       </td>
@@ -4058,6 +4979,82 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                   ))}
                 </div>
 
+                {/* Quick Standar vs A4 4-Orang Presets */}
+                <div className="inline-flex flex-wrap rounded-md border border-amber-300 bg-amber-50/60 p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => applyPesertaLayoutPreset('standar_id')}
+                    className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                      settings.lebarKartuMm === 58 && settings.tinggiKartuMm === 95
+                        ? 'bg-slate-900 text-amber-400'
+                        : 'text-slate-700 hover:bg-amber-100'
+                    }`}
+                  >
+                    Standar ID (58×95)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyPesertaLayoutPreset('standar_6')}
+                    className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                      paperCode === 'A4' &&
+                      !isLandscape &&
+                      (settings.jumlahKolom || 2) === 2 &&
+                      settings.layoutPerPage === 6 &&
+                      !isValidCardMm(settings.lebarKartuMm, 40)
+                        ? 'bg-slate-900 text-amber-400'
+                        : 'text-slate-700 hover:bg-amber-100'
+                    }`}
+                  >
+                    Standar A4 (6 Orang)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyPesertaLayoutPreset('a4_4_orang')}
+                    className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                      paperCode === 'A4' &&
+                      !isLandscape &&
+                      (settings.jumlahKolom || 2) === 2 &&
+                      settings.layoutPerPage === 4 &&
+                      !isValidCardMm(settings.lebarKartuMm, 40)
+                        ? 'bg-emerald-700 text-white'
+                        : 'text-emerald-900 hover:bg-emerald-100'
+                    }`}
+                  >
+                    A4 (4 Orang / Hal)
+                  </button>
+                </div>
+
+                {/* Quick Individual vs Mass Scope */}
+                <div className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50/70 p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setPrintMode('filtered')}
+                    className={`px-2 py-0.5 rounded font-bold ${
+                      printMode !== 'individual'
+                        ? 'bg-blue-700 text-white'
+                        : 'text-blue-900 hover:bg-blue-100'
+                    }`}
+                  >
+                    Massal ({printMode === 'selected' ? selectedIds.length : filteredSiswa.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!individualPrintId && (filteredSiswa[0] || activeSiswa[0])) {
+                        setIndividualPrintId((filteredSiswa[0] || activeSiswa[0]).id);
+                      }
+                      setPrintMode('individual');
+                    }}
+                    className={`px-2 py-0.5 rounded font-bold ${
+                      printMode === 'individual'
+                        ? 'bg-slate-900 text-amber-400'
+                        : 'text-blue-900 hover:bg-blue-100'
+                    }`}
+                  >
+                    Individu (1)
+                  </button>
+                </div>
+
                 {/* Two-Sided Mode Pills */}
                 <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5 text-[11px]">
                   {[
@@ -4223,7 +5220,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                   const renderFrontCard = (siswa: Siswa, sideBadge?: string) => {
                     const kelas = siswa.rombelSaatIni || siswa.kelas || '-';
                     const sesiText = resolveEffectiveSiswaSesi(siswa, settings.sesiTersedia);
-                    const ruangText = siswa.ruangUjian || `${settings.defaultRuangPrefix}01`;
+                    const ruangText = (siswa.ruangUjian || '').trim() || '-';
                     const photoSrc = resolveSiswaPhotoSrc(siswa);
                     const barcodeVal = resolveSiswaBarcodeValue(siswa);
 
@@ -4264,12 +5261,14 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
                                   <div className="shrink-0">
                                     {profile.logoType === 'custom' && profile.logoUrl ? (
                                       <img
-                                        src={profile.logoUrl}
+                                        src={resolveDirectImageUrl(profile.logoUrl)}
                                         alt="Logo"
                                         className={`${fontScale.logo} object-contain`}
                                       />
+                                    ) : profile.logoType === 'default' || profile.logoType === 'default_vector' ? (
+                                      <Sman9SurabayaLogoSvg customUrl={profile.sekolahLogoUrl} className={fontScale.logo} />
                                     ) : (
-                                      <PemprovJatimLogo className={fontScale.logo} />
+                                      <PemprovJatimLogo customUrl={profile.pemprovLogoUrl} className={fontScale.logo} />
                                     )}
                                   </div>
                                   <div className="flex-1 text-center leading-tight min-w-0">
@@ -4582,7 +5581,7 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
 
                   const renderBackCard = (siswa: Siswa, sideBadge?: string) => {
                     const kelas = siswa.rombelSaatIni || siswa.kelas || '-';
-                    const ruangText = siswa.ruangUjian || `${settings.defaultRuangPrefix}01`;
+                    const ruangText = (siswa.ruangUjian || '').trim() || '-';
                     const sesiText = resolveEffectiveSiswaSesi(siswa, settings.sesiTersedia);
                     const fallbackSesi = settings.sesiTersedia[0] || 'Sesi 1';
                     const syncEnabled = settings.sinkronWaktuJadwalDenganSesi !== false;
@@ -4989,6 +5988,20 @@ export const KartuUjianView: React.FC<KartuUjianViewProps> = ({
           </div>
         );
       })()}
+
+      <AturKelompokRuangSiswaModal
+        isOpen={isRoomGroupModalOpen}
+        onClose={() => setIsRoomGroupModalOpen(false)}
+        siswaList={siswaList}
+        ujianSettings={settings}
+        initialSelectedRoom={roomGroupInitialRoom}
+        onUpdateUjianSettings={onUpdateSettings}
+        onSaveSiswa={(updatedList, msg) => {
+          onUpdateSiswa(updatedList);
+          appendAuditLog('ATUR_KELOMPOK_RUANG_SISWA', msg);
+          notify('success', msg);
+        }}
+      />
     </div>
   );
 };

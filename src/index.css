@@ -71,3 +71,9 @@
     page-break-after: auto;
   }
 }
+
+/* Halaman Surat Ijin Masuk Ujian: mengikuti dimensi A4/Folio dinamis dan @page saat cetak */
+.ijin-page { box-sizing: border-box; }
+@media print {
+  .ijin-page { padding: 0 !important; width: 100% !important; margin: 0 !important; }
+}

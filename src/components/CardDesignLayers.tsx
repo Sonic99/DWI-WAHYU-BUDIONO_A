@@ -8,7 +8,7 @@ import {
   CustomCardTheme,
   SchoolProfile
 } from '../types';
-import { PemprovJatimLogo } from './OfficialStamps';
+import { Sman9SurabayaLogoSvg } from './OfficialStamps';
 import {
   Type,
   Shuffle,
@@ -756,11 +756,11 @@ export const CardBackgroundLayers: React.FC<CardBackgroundLayersProps> = ({ desi
           className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-0 overflow-hidden"
           aria-hidden="true"
         >
-          <div className="opacity-[0.065] grayscale contrast-125 scale-110">
+          <div className="opacity-[0.075] contrast-125 scale-110">
             {profile.logoType === 'custom' && profile.logoUrl ? (
               <img src={profile.logoUrl} alt="" className="w-24 h-24 object-contain" />
             ) : (
-              <PemprovJatimLogo className="w-24 h-24" />
+              <Sman9SurabayaLogoSvg className="w-24 h-24" monochrome />
             )}
           </div>
         </div>

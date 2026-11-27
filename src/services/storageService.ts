@@ -14,10 +14,32 @@ import {
   TemplateSurat,
   KartuUjianSettings,
   JadwalUjianItem,
+  JadwalUlanganRepoItem,
+  KurikulumMapelItem,
+  BukuIndukKurikulumRepoItem,
+  BukuIndukActiveConfig,
+  BukuIndukSiswaMeta,
   PanitiaPengawasItem,
   KartuPanitiaSettings,
-  JadwalPengawasSlot
+  JadwalPengawasSlot,
+  TempelRuangConfigBundle,
+  TempelRuangKelompok,
+  TempelRuangItem,
+  TempelRuangSettings,
+  TempelRuangTingkat,
+  StrukturOrganisasiBundle,
+  BeritaAcaraUjianRecord,
+  PresensiEmployeeItem,
+  DailyPresensiRecord,
+  PresensiConfig,
+  PresensiBuktiIzinItem,
+  PresensiMonthlyRepoItem
 } from '../types';
+import {
+  INITIAL_KURIKULUM_REPO_SEEDS,
+  INITIAL_BUKU_INDUK_CONFIG,
+  resolveSusunanPelajaranUntukSiswa
+} from '../utils/kurikulumPresets';
 import { 
   initialSchoolProfile, 
   initialUsers, 
@@ -44,6 +66,35 @@ import {
   normalizeAssignmentValue,
   recomputeTotalsPerSlot
 } from '../utils/pengawasSchedule';
+import {
+  syncTempelRuangBundleWithKartuUjian,
+  formatPengawasRoomAssignmentLabel
+} from '../utils/examRoomSync';
+import {
+  DEFAULT_STRUKTUR_LEVEL_RULES,
+  DEFAULT_STRUKTUR_SETTINGS,
+  alignLegacyTopRowBundle,
+  createDefaultStrukturOrganisasiBundle,
+  ensureNodeTupoksiDefaults
+} from '../utils/strukturOrganisasi';
+import {
+  buildDefaultPresensiConfig,
+  buildEmployeesFromGtkMaster,
+  sanitizeHolidaysInAttendanceMap,
+  seedAttendanceMonthForEmployees
+} from '../utils/presensiBkd';
+import {
+  compactStrukturBundleForLocalStorage,
+  countInlinePhotoDataUrls,
+  loadStrukturOrganisasiFromIdb,
+  saveStrukturOrganisasiToIdb
+} from './strukturBundleStorage';
+import {
+  loadGtkPhotoMapFromIdb,
+  mergeGtkPhotosFromMap,
+  stripInlineGtkPhotos,
+  upsertGtkPhotosToIdb
+} from './gtkPhotoStorage';
 
 const STORAGE_KEYS = {
   SCHOOL_PROFILE: 'sip_tu_school_profile_v1',
@@ -58,6 +109,19 @@ const STORAGE_KEYS = {
   TENDIK: 'sip_tu_tendik_master_v1',
   TEMPLATES: 'sip_tu_templates_v1',
   KARTU_UJIAN: 'sip_tu_kartu_ujian_v1',
+  JADWAL_ULANGAN_REPO: 'sip_tu_jadwal_ulangan_repo_v1',
+  BUKU_INDUK_CONFIG: 'sip_tu_buku_induk_config_v1',
+  BUKU_INDUK_KURIKULUM_REPO: 'sip_tu_buku_induk_kurikulum_repo_v1',
+  BUKU_INDUK_SISWA_META: 'sip_tu_buku_induk_siswa_meta_v1',
+  TEMPEL_RUANG_CONFIG: 'sip_tu_tempel_ruang_v1',
+  STRUKTUR_ORGANISASI: 'sip_tu_struktur_organisasi_v1',
+  DAFTAR_HADIR_UJIAN_MARKS: 'sip_tu_daftar_hadir_ujian_marks_v1',
+  BERITA_ACARA_UJIAN: 'sip_tu_berita_acara_ujian_v1',
+  PRESENSI_EMPLOYEES: 'sip_tu_presensi_employees_v1',
+  PRESENSI_MAP: 'sip_tu_presensi_map_v1',
+  PRESENSI_CONFIG: 'sip_tu_presensi_config_v1',
+  PRESENSI_BUKTI: 'sip_tu_presensi_bukti_v1',
+  PRESENSI_MONTHLY_REPO: 'sip_tu_presensi_monthly_repo_v1',
   PANITIA_PENGAWAS: 'sip_tu_panitia_pengawas_v1',
   KARTU_PANITIA_SETTINGS: 'sip_tu_kartu_panitia_settings_v1',
 };
@@ -182,6 +246,344 @@ export const saveStoredKartuUjianSettings = (settings: KartuUjianSettings): void
   localStorage.setItem(STORAGE_KEYS.KARTU_UJIAN, JSON.stringify(settings));
 };
 
+// ================= REPOSITORI JADWAL ULANGAN =================
+export const cloneJadwalItems = (list?: JadwalUjianItem[]): JadwalUjianItem[] =>
+  (list || []).map((item, idx) => ({
+    ...item,
+    id: item.id || `jdw-${Date.now()}-${idx}`
+  }));
+
+export const computeJadwalSignature = (list?: JadwalUjianItem[]): string => {
+  const normalized = (list || []).map(item => [
+    (item.hariTanggal || '').trim(),
+    (item.waktu || '').trim(),
+    (item.mataPelajaran || '').trim(),
+    item.kondisiTarget || 'Semua',
+    (item.kondisiNilai || '').trim(),
+    (item.keterangan || '').trim()
+  ]);
+  return JSON.stringify(normalized);
+};
+
+export const createJadwalRepoSnapshotFromSettings = (
+  settings: KartuUjianSettings,
+  options?: {
+    id?: string;
+    nama?: string;
+    keterangan?: string;
+    isAutoArchive?: boolean;
+  }
+): JadwalUlanganRepoItem => {
+  const nowIso = new Date().toISOString();
+  const baseName =
+    options?.nama?.trim() ||
+    `${settings.namaUjian || 'Jadwal Ulangan'} (${settings.semester || 'Semester'} ${settings.tahunPelajaran || ''})`.trim();
+  return {
+    id: options?.id || `jrepo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    nama: baseName,
+    keterangan: options?.keterangan?.trim() || '',
+    namaUjian: settings.namaUjian,
+    tahunPelajaran: settings.tahunPelajaran,
+    semester: settings.semester,
+    judulBelakang: settings.judulBelakang,
+    catatanBelakang: settings.catatanBelakang,
+    maksJadwalBelakang: settings.maksJadwalBelakang,
+    tataLetakJadwalBelakang: settings.tataLetakJadwalBelakang,
+    sinkronWaktuJadwalDenganSesi: settings.sinkronWaktuJadwalDenganSesi !== false,
+    sesiTersedia: Array.isArray(settings.sesiTersedia) ? [...settings.sesiTersedia] : [],
+    jadwalUjian: cloneJadwalItems(settings.jadwalUjian),
+    isAutoArchive: options?.isAutoArchive,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+};
+
+export const getStoredJadwalUlanganRepo = (
+  currentSettings?: KartuUjianSettings
+): JadwalUlanganRepoItem[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.JADWAL_ULANGAN_REPO);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((entry: JadwalUlanganRepoItem) => ({
+          ...entry,
+          jadwalUjian: cloneJadwalItems(entry.jadwalUjian)
+        }));
+      }
+    }
+
+    // Seed repository automatically from current configured settings & initial default
+    const seeded: JadwalUlanganRepoItem[] = [];
+    const active = currentSettings || getStoredKartuUjianSettings();
+    const activeItems = active.jadwalUjian || [];
+    const defaultItems = initialKartuUjianSettings.jadwalUjian || [];
+
+    if (activeItems.length > 0) {
+      seeded.push(
+        createJadwalRepoSnapshotFromSettings(active, {
+          id: active.activeJadwalRepoId || 'jrepo-aktif-awal',
+          nama: `${active.namaUjian || 'Jadwal Ulangan Aktif'} (${active.semester || 'Gasal'} ${active.tahunPelajaran || '2026/2027'})`,
+          keterangan: 'Jadwal aktif yang sudah ter-setting di kartu ujian'
+        })
+      );
+    }
+
+    const activeSig = computeJadwalSignature(activeItems);
+    const defaultSig = computeJadwalSignature(defaultItems);
+    if (defaultItems.length > 0 && activeSig !== defaultSig) {
+      seeded.push(
+        createJadwalRepoSnapshotFromSettings(initialKartuUjianSettings, {
+          id: 'jrepo-standar-16',
+          nama: 'Standar 16 Mapel PSAS Gasal (SMAN 9 Surabaya)',
+          keterangan: 'Template bawaan 16 mata pelajaran'
+        })
+      );
+    }
+
+    localStorage.setItem(STORAGE_KEYS.JADWAL_ULANGAN_REPO, JSON.stringify(seeded));
+    return seeded;
+  } catch {
+    return [];
+  }
+};
+
+export const saveStoredJadwalUlanganRepo = (repo: JadwalUlanganRepoItem[]): void => {
+  localStorage.setItem(STORAGE_KEYS.JADWAL_ULANGAN_REPO, JSON.stringify(repo));
+};
+
+export const ensureCurrentJadwalArchivedInRepo = (
+  settings: KartuUjianSettings,
+  currentRepo?: JadwalUlanganRepoItem[],
+  reasonLabel?: string
+): { repo: JadwalUlanganRepoItem[]; archivedItem: JadwalUlanganRepoItem | null } => {
+  const repo = currentRepo ? [...currentRepo] : getStoredJadwalUlanganRepo(settings);
+  const currentItems = settings.jadwalUjian || [];
+  if (currentItems.length === 0) {
+    return { repo, archivedItem: null };
+  }
+
+  const currentSig = computeJadwalSignature(currentItems);
+  const alreadySaved = repo.some(item => computeJadwalSignature(item.jadwalUjian) === currentSig);
+  if (alreadySaved) {
+    return { repo, archivedItem: null };
+  }
+
+  const now = new Date();
+  const timeStamp = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const archivedItem = createJadwalRepoSnapshotFromSettings(settings, {
+    nama: `${settings.namaUjian || 'Jadwal Ulangan'} · ${reasonLabel || 'Arsip Otomatis'} (${timeStamp})`,
+    keterangan: `Diamankan otomatis (${currentItems.length} mapel) agar tidak tertimpa perubahan baru`,
+    isAutoArchive: true
+  });
+
+  const nextRepo = [archivedItem, ...repo];
+  saveStoredJadwalUlanganRepo(nextRepo);
+  return { repo: nextRepo, archivedItem };
+};
+
+// ================= BUKU INDUK SISWA & REPOSITORI KURIKULUM =================
+export const cloneKurikulumMapelList = (list?: KurikulumMapelItem[]): KurikulumMapelItem[] =>
+  (list || []).map((m, idx) => ({
+    ...m,
+    id: m.id || `mapel-${Date.now()}-${idx}`
+  }));
+
+export const computeKurikulumSignature = (
+  jenisKurikulum: string,
+  list?: KurikulumMapelItem[]
+): string => {
+  const normalized = (list || []).map(m => [
+    (m.kode || '').trim(),
+    (m.kelompok || '').trim(),
+    (m.namaMapel || '').trim(),
+    Number(m.jpPerMinggu || 0),
+    Number(m.kkm || 0),
+    m.kondisiTingkat || 'Semua',
+    (m.kondisiRumpun || 'Semua').trim(),
+    m.kondisiStatus || 'Wajib',
+    (m.keterangan || '').trim()
+  ]);
+  return JSON.stringify({ jenis: (jenisKurikulum || '').trim(), mapel: normalized });
+};
+
+export const getStoredBukuIndukConfig = (): BukuIndukActiveConfig => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.BUKU_INDUK_CONFIG);
+    if (!raw) {
+      localStorage.setItem(STORAGE_KEYS.BUKU_INDUK_CONFIG, JSON.stringify(INITIAL_BUKU_INDUK_CONFIG));
+      return {
+        ...INITIAL_BUKU_INDUK_CONFIG,
+        susunanPelajaran: cloneKurikulumMapelList(INITIAL_BUKU_INDUK_CONFIG.susunanPelajaran)
+      };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      ...INITIAL_BUKU_INDUK_CONFIG,
+      ...parsed,
+      susunanPelajaran: Array.isArray(parsed.susunanPelajaran)
+        ? cloneKurikulumMapelList(parsed.susunanPelajaran)
+        : cloneKurikulumMapelList(INITIAL_BUKU_INDUK_CONFIG.susunanPelajaran)
+    };
+  } catch {
+    return {
+      ...INITIAL_BUKU_INDUK_CONFIG,
+      susunanPelajaran: cloneKurikulumMapelList(INITIAL_BUKU_INDUK_CONFIG.susunanPelajaran)
+    };
+  }
+};
+
+export const saveStoredBukuIndukConfig = (cfg: BukuIndukActiveConfig): void => {
+  localStorage.setItem(STORAGE_KEYS.BUKU_INDUK_CONFIG, JSON.stringify(cfg));
+};
+
+export const getStoredBukuIndukKurikulumRepo = (): BukuIndukKurikulumRepoItem[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.BUKU_INDUK_KURIKULUM_REPO);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((entry: BukuIndukKurikulumRepoItem) => ({
+          ...entry,
+          susunanPelajaran: cloneKurikulumMapelList(entry.susunanPelajaran)
+        }));
+      }
+    }
+    const seeded = INITIAL_KURIKULUM_REPO_SEEDS.map(s => ({
+      ...s,
+      susunanPelajaran: cloneKurikulumMapelList(s.susunanPelajaran)
+    }));
+    localStorage.setItem(STORAGE_KEYS.BUKU_INDUK_KURIKULUM_REPO, JSON.stringify(seeded));
+    return seeded;
+  } catch {
+    return INITIAL_KURIKULUM_REPO_SEEDS.map(s => ({
+      ...s,
+      susunanPelajaran: cloneKurikulumMapelList(s.susunanPelajaran)
+    }));
+  }
+};
+
+export const saveStoredBukuIndukKurikulumRepo = (repo: BukuIndukKurikulumRepoItem[]): void => {
+  localStorage.setItem(STORAGE_KEYS.BUKU_INDUK_KURIKULUM_REPO, JSON.stringify(repo));
+};
+
+export const createKurikulumRepoFromConfig = (
+  cfg: BukuIndukActiveConfig,
+  options?: { id?: string; nama?: string; deskripsi?: string; isAutoArchive?: boolean }
+): BukuIndukKurikulumRepoItem => {
+  const nowIso = new Date().toISOString();
+  return {
+    id: options?.id || `krepo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    nama:
+      options?.nama?.trim() ||
+      cfg.namaKurikulumAktif ||
+      `${cfg.jenisKurikulum} (${cfg.tahunPelajaran})`,
+    jenisKurikulum: cfg.jenisKurikulum,
+    tahunPelajaran: cfg.tahunPelajaran,
+    faseDefault: cfg.faseDefault,
+    skKurikulum: cfg.skKurikulum,
+    skalaNilai: cfg.skalaNilai || '0-100',
+    deskripsi: options?.deskripsi?.trim() || `${cfg.susunanPelajaran.length} mata pelajaran`,
+    susunanPelajaran: cloneKurikulumMapelList(cfg.susunanPelajaran),
+    isAutoArchive: options?.isAutoArchive,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+};
+
+export const ensureCurrentKurikulumArchivedInRepo = (
+  cfg: BukuIndukActiveConfig,
+  currentRepo?: BukuIndukKurikulumRepoItem[],
+  reasonLabel?: string
+): { repo: BukuIndukKurikulumRepoItem[]; archivedItem: BukuIndukKurikulumRepoItem | null } => {
+  const repo = currentRepo ? [...currentRepo] : getStoredBukuIndukKurikulumRepo();
+  if (!cfg.susunanPelajaran || cfg.susunanPelajaran.length === 0) {
+    return { repo, archivedItem: null };
+  }
+  const activeSig = computeKurikulumSignature(cfg.jenisKurikulum, cfg.susunanPelajaran);
+  const exists = repo.some(
+    r => computeKurikulumSignature(r.jenisKurikulum, r.susunanPelajaran) === activeSig
+  );
+  if (exists) {
+    return { repo, archivedItem: null };
+  }
+
+  const now = new Date();
+  const ts = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const archivedItem = createKurikulumRepoFromConfig(cfg, {
+    nama: `${cfg.namaKurikulumAktif || cfg.jenisKurikulum} · ${reasonLabel || 'Arsip Otomatis'} (${ts})`,
+    deskripsi: `Diamankan otomatis (${cfg.susunanPelajaran.length} mapel) agar tidak tertimpa kurikulum lain`,
+    isAutoArchive: true
+  });
+  const nextRepo = [archivedItem, ...repo];
+  saveStoredBukuIndukKurikulumRepo(nextRepo);
+  return { repo: nextRepo, archivedItem };
+};
+
+export const getStoredBukuIndukSiswaMeta = (): Record<string, BukuIndukSiswaMeta> => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.BUKU_INDUK_SISWA_META);
+    return raw ? (JSON.parse(raw) as Record<string, BukuIndukSiswaMeta>) : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveStoredBukuIndukSiswaMeta = (map: Record<string, BukuIndukSiswaMeta>): void => {
+  localStorage.setItem(STORAGE_KEYS.BUKU_INDUK_SISWA_META, JSON.stringify(map));
+};
+
+export const exportBukuIndukSiswaToExcel = (
+  siswaList: Siswa[],
+  activeConfig: BukuIndukActiveConfig,
+  repoList: BukuIndukKurikulumRepoItem[],
+  metaMap: Record<string, BukuIndukSiswaMeta>
+): void => {
+  const rows = siswaList.map((s, idx) => {
+    const meta = metaMap[s.id];
+    const overrideRepo = meta?.kurikulumKhususId
+      ? repoList.find(r => r.id === meta.kurikulumKhususId)
+      : undefined;
+    const susunanBerlaku = resolveSusunanPelajaranUntukSiswa(
+      overrideRepo ? overrideRepo.susunanPelajaran : activeConfig.susunanPelajaran,
+      s
+    );
+    const kurikulumLabel = overrideRepo ? overrideRepo.nama : activeConfig.namaKurikulumAktif;
+    return {
+      No: idx + 1,
+      'No Buku Induk / NIPD': meta?.nomorBukuInduk || s.nipd || s.nis || '-',
+      NISN: s.nisn || '-',
+      'Nama Peserta Didik': s.nama,
+      'L/P': s.jenisKelamin,
+      'Tempat, Tanggal Lahir':
+        s.tempatTanggalLahir || [s.tempatLahir, s.tanggalLahir].filter(Boolean).join(', ') || '-',
+      Agama: s.agama || 'Islam',
+      'Kelas / Rombel': s.rombelSaatIni || s.kelas || '-',
+      'Tahun Masuk': meta?.tahunMasuk || '2026',
+      'Tanggal Diterima': meta?.tanggalDiterima || '-',
+      'Sekolah Asal': s.sekolahAsal || '-',
+      'Nama Ayah': s.namaAyah || s.namaOrtu || '-',
+      'Nama Ibu': s.namaIbu || '-',
+      Alamat: s.alamat || '-',
+      'Kurikulum Berlaku': kurikulumLabel,
+      'Jumlah Mapel Kondisional': susunanBerlaku.length,
+      'Daftar Susunan Pelajaran': susunanBerlaku.map(m => m.namaMapel).join('; '),
+      Status: s.status || 'Aktif'
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Buku Induk Siswa');
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  triggerWorkbookDownload(wb, `Buku_Induk_Siswa_SMAN9_${dateStr}.xlsx`);
+  appendAuditLog(
+    'EXPORT_BUKU_INDUK_XLSX',
+    `Mengekspor Buku Induk ${siswaList.length} siswa (${activeConfig.jenisKurikulum}) ke Excel.`
+  );
+};
+
 export const getStoredPanitiaPengawas = (): PanitiaPengawasItem[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PANITIA_PENGAWAS);
@@ -278,6 +680,525 @@ export const getStoredKartuPanitiaSettings = (): KartuPanitiaSettings => {
 
 export const saveStoredKartuPanitiaSettings = (settings: KartuPanitiaSettings): void => {
   localStorage.setItem(STORAGE_KEYS.KARTU_PANITIA_SETTINGS, JSON.stringify(settings));
+};
+
+// ================= SETTING TEMPEL NOMOR RUANG UJIAN PER TINGKAT =================
+export const DEFAULT_TEMPEL_RUANG_SETTINGS: TempelRuangSettings = {
+  paperSize: 'F4',
+  orientasi: 'portrait',
+  labelPerPage: 2,
+  marginMm: 10,
+  gapMm: 6,
+  garisPotong: 'dashed_gunting',
+  pisahHalamanPerKelompok: false,
+  ikutiSettingKartuUjian: true,
+  fontModel: 'outfit_tegas',
+  fontBodyModel: 'jakarta',
+  skalaAngkaPct: 100,
+  skalaTeksPct: 100,
+  spasiHuruf: 'standar',
+  kapitalJudul: true,
+  desainBingkai: 'blok_angka',
+  warnaPreset: 'otomatis_tingkat',
+  judulAtas: 'RUANG UJIAN',
+  subjudulUjian: initialKartuUjianSettings.namaUjian,
+  tahunPelajaran: initialKartuUjianSettings.tahunPelajaran,
+  semester: initialKartuUjianSettings.semester,
+  catatanKaki: 'HARAP TENANG • SEDANG BERLANGSUNG UJIAN',
+  tampilkanKopMini: true,
+  tampilkanKelompokBadge: true,
+  tampilkanKelasRombel: true,
+  tampilkanRentangNomor: true,
+  tampilkanJumlahPeserta: true,
+  tampilkanSesi: true,
+  tampilkanLokasi: true,
+  tampilkanQrVerifikasi: true
+};
+
+export const buildDefaultTempelRuangBundle = (
+  siswaList: Siswa[],
+  ujianSettings: KartuUjianSettings,
+  prevSettings?: Partial<TempelRuangSettings>
+): TempelRuangConfigBundle => {
+  const baseSeed: TempelRuangConfigBundle = {
+    settings: {
+      ...DEFAULT_TEMPEL_RUANG_SETTINGS,
+      subjudulUjian: ujianSettings.namaUjian || DEFAULT_TEMPEL_RUANG_SETTINGS.subjudulUjian,
+      tahunPelajaran: ujianSettings.tahunPelajaran || DEFAULT_TEMPEL_RUANG_SETTINGS.tahunPelajaran,
+      semester: ujianSettings.semester || DEFAULT_TEMPEL_RUANG_SETTINGS.semester,
+      ...(prevSettings || {})
+    },
+    kelompokList: [],
+    ruangList: [],
+    updatedAt: new Date().toISOString()
+  };
+
+  return syncTempelRuangBundleWithKartuUjian(baseSeed, siswaList, ujianSettings);
+};
+
+export const getStoredTempelRuangConfig = (): TempelRuangConfigBundle => {
+  const siswaList = getStoredSiswa();
+  const ujianSettings = getStoredKartuUjianSettings();
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.TEMPEL_RUANG_CONFIG);
+    if (!raw) {
+      return buildDefaultTempelRuangBundle(siswaList, ujianSettings);
+    }
+    const parsed = JSON.parse(raw) as Partial<TempelRuangConfigBundle>;
+    const mergedSettings: TempelRuangSettings = {
+      ...DEFAULT_TEMPEL_RUANG_SETTINGS,
+      ...(parsed.settings || {}),
+      ikutiSettingKartuUjian:
+        parsed.settings?.ikutiSettingKartuUjian !== undefined
+          ? parsed.settings.ikutiSettingKartuUjian
+          : true
+    };
+    const baseBundle: TempelRuangConfigBundle = {
+      settings: mergedSettings,
+      kelompokList: Array.isArray(parsed.kelompokList) ? parsed.kelompokList : [],
+      ruangList: Array.isArray(parsed.ruangList) ? parsed.ruangList : [],
+      updatedAt: parsed.updatedAt || new Date().toISOString()
+    };
+    if (mergedSettings.ikutiSettingKartuUjian !== false || baseBundle.ruangList.length === 0) {
+      return syncTempelRuangBundleWithKartuUjian(baseBundle, siswaList, ujianSettings);
+    }
+    return baseBundle;
+  } catch {
+    return buildDefaultTempelRuangBundle(siswaList, ujianSettings);
+  }
+};
+
+export const saveStoredTempelRuangConfig = (bundle: TempelRuangConfigBundle): void => {
+  localStorage.setItem(
+    STORAGE_KEYS.TEMPEL_RUANG_CONFIG,
+    JSON.stringify({
+      ...bundle,
+      updatedAt: new Date().toISOString()
+    })
+  );
+};
+
+// ================= STRUKTUR ORGANISASI SEKOLAH =================
+export const getStoredStrukturOrganisasi = (): StrukturOrganisasiBundle => {
+  const profile = getStoredSchoolProfile();
+  const guruList = getStoredGuru();
+  const tendikList = getStoredTendik();
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.STRUKTUR_ORGANISASI);
+    if (!raw) {
+      return createDefaultStrukturOrganisasiBundle(profile, guruList, tendikList);
+    }
+    const parsed = JSON.parse(raw) as Partial<StrukturOrganisasiBundle>;
+    if (!Array.isArray(parsed.nodes) || parsed.nodes.length === 0) {
+      return createDefaultStrukturOrganisasiBundle(profile, guruList, tendikList);
+    }
+    return alignLegacyTopRowBundle({
+      settings: {
+        ...DEFAULT_STRUKTUR_SETTINGS,
+        ...(parsed.settings || {})
+      },
+      levelRules:
+        Array.isArray(parsed.levelRules) && parsed.levelRules.length > 0
+          ? parsed.levelRules
+          : DEFAULT_STRUKTUR_LEVEL_RULES.map(r => ({ ...r })),
+      nodes: ensureNodeTupoksiDefaults(parsed.nodes),
+      crossLinks: Array.isArray(parsed.crossLinks) ? parsed.crossLinks : [],
+      topRowSchemaVersion: parsed.topRowSchemaVersion,
+      updatedAt: parsed.updatedAt || new Date().toISOString()
+    }, tendikList);
+  } catch {
+    return createDefaultStrukturOrganisasiBundle(profile, guruList, tendikList);
+  }
+};
+
+export const saveStoredStrukturOrganisasi = (bundle: StrukturOrganisasiBundle): void => {
+  const payload: StrukturOrganisasiBundle = {
+    ...bundle,
+    updatedAt: new Date().toISOString()
+  };
+  void saveStrukturOrganisasiToIdb(payload);
+  try {
+    localStorage.setItem(STORAGE_KEYS.STRUKTUR_ORGANISASI, JSON.stringify(payload));
+  } catch {
+    try {
+      const compacted = compactStrukturBundleForLocalStorage(payload);
+      localStorage.setItem(STORAGE_KEYS.STRUKTUR_ORGANISASI, JSON.stringify(compacted));
+    } catch {
+      // IndexedDB already holds the full bundle + photos safely
+    }
+  }
+};
+
+export const hydrateStoredStrukturOrganisasiAsync = async (): Promise<StrukturOrganisasiBundle | null> => {
+  try {
+    const idbBundle = await loadStrukturOrganisasiFromIdb();
+    if (!idbBundle || !Array.isArray(idbBundle.nodes) || idbBundle.nodes.length === 0) {
+      return null;
+    }
+    const lsBundle = getStoredStrukturOrganisasi();
+    const idbTime = Date.parse(idbBundle.updatedAt || '') || 0;
+    const lsTime = Date.parse(lsBundle.updatedAt || '') || 0;
+    const idbPhotoCount = countInlinePhotoDataUrls(idbBundle);
+    const lsPhotoCount = countInlinePhotoDataUrls(lsBundle);
+
+    if (idbTime >= lsTime || idbPhotoCount > lsPhotoCount) {
+      const tendikList = getStoredTendik();
+      return alignLegacyTopRowBundle(
+        {
+          settings: {
+            ...DEFAULT_STRUKTUR_SETTINGS,
+            ...(idbBundle.settings || {})
+          },
+          levelRules:
+            Array.isArray(idbBundle.levelRules) && idbBundle.levelRules.length > 0
+              ? idbBundle.levelRules
+              : DEFAULT_STRUKTUR_LEVEL_RULES.map(r => ({ ...r })),
+          nodes: ensureNodeTupoksiDefaults(idbBundle.nodes),
+          crossLinks: Array.isArray(idbBundle.crossLinks) ? idbBundle.crossLinks : [],
+          topRowSchemaVersion: idbBundle.topRowSchemaVersion,
+          updatedAt: idbBundle.updatedAt || new Date().toISOString()
+        },
+        tendikList
+      );
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+// ================= DAFTAR HADIR SISWA & PENGAWAS UJIAN =================
+export interface DaftarHadirStoredMarks {
+  siswaStatus: Record<string, Record<string, 'H' | 'S' | 'I' | 'A' | ''>>;
+  pengawasMarks: Record<
+    string,
+    Record<string, { status: 'Hadir' | 'Digantikan' | 'Izin' | ''; jamHadir: string; catatan: string }>
+  >;
+}
+
+export const getStoredDaftarHadirMarks = (): DaftarHadirStoredMarks => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DAFTAR_HADIR_UJIAN_MARKS);
+    if (!raw) return { siswaStatus: {}, pengawasMarks: {} };
+    const parsed = JSON.parse(raw);
+    return {
+      siswaStatus: parsed?.siswaStatus && typeof parsed.siswaStatus === 'object' ? parsed.siswaStatus : {},
+      pengawasMarks:
+        parsed?.pengawasMarks && typeof parsed.pengawasMarks === 'object' ? parsed.pengawasMarks : {}
+    };
+  } catch {
+    return { siswaStatus: {}, pengawasMarks: {} };
+  }
+};
+
+export const saveStoredDaftarHadirMarks = (marks: DaftarHadirStoredMarks): void => {
+  localStorage.setItem(STORAGE_KEYS.DAFTAR_HADIR_UJIAN_MARKS, JSON.stringify(marks));
+};
+
+export const exportDaftarHadirSiswaExcel = (params: {
+  namaUjian: string;
+  jadwalLabel: string;
+  rooms: { nomorRuang: string; tingkatKelas: string; sesiUjian: string; students: Siswa[] }[];
+  statusMap: Record<string, 'H' | 'S' | 'I' | 'A' | ''>;
+}): void => {
+  const rows: (string | number)[][] = [
+    ['DAFTAR HADIR PESERTA ULANGAN'],
+    ['Ujian', params.namaUjian],
+    ['Jadwal / Mapel', params.jadwalLabel],
+    [],
+    ['No', 'Ruang', 'Tingkat', 'No. Peserta Ujian', 'NIS / NISN', 'Nama Peserta Didik', 'Kelas', 'Sesi', 'Status (H/S/I/A)', 'Keterangan']
+  ];
+
+  let seq = 0;
+  params.rooms.forEach(room => {
+    room.students.forEach(s => {
+      seq++;
+      const st = params.statusMap[s.id] || '';
+      rows.push([
+        seq,
+        room.nomorRuang,
+        room.tingkatKelas,
+        s.nomorUjian || '-',
+        `${s.nis || '-'}${s.nisn ? ` / ${s.nisn}` : ''}`,
+        s.nama,
+        s.rombelSaatIni || s.kelas || '-',
+        s.sesiUjian || room.sesiUjian || '-',
+        st || '-',
+        st === 'H' ? 'Hadir' : st === 'S' ? 'Sakit' : st === 'I' ? 'Izin' : st === 'A' ? 'Alpa' : ''
+      ]);
+    });
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [
+    { wch: 5 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 16 },
+    { wch: 22 },
+    { wch: 30 },
+    { wch: 12 },
+    { wch: 22 },
+    { wch: 16 },
+    { wch: 18 }
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Daftar_Hadir_Siswa');
+  XLSX.writeFile(wb, `Daftar_Hadir_Siswa_Ujian_${new Date().toISOString().slice(0, 10)}.xlsx`);
+};
+
+export const exportDaftarHadirPengawasExcel = (params: {
+  namaUjian: string;
+  slot: JadwalPengawasSlot;
+  rows: { item: PanitiaPengawasItem; assignment: string; status: string; jamHadir: string; catatan: string }[];
+}): void => {
+  const sheetRows: (string | number)[][] = [
+    ['DAFTAR HADIR PENGAWAS RUANG UJIAN'],
+    ['Ujian', params.namaUjian],
+    ['Hari / Tanggal', `${params.slot.hari}, ${params.slot.tanggal}`],
+    ['Sesi & Waktu', `${params.slot.sesiLabel} (${params.slot.waktu})`],
+    ['Mata Pelajaran', params.slot.mapel],
+    [],
+    ['No', 'No. Tugas', 'Nama Pengawas Ruang', 'NIP', 'Tugas / Ruang Jaga', 'Jam Hadir', 'Status Kehadiran', 'Keterangan']
+  ];
+
+  params.rows.forEach((r, idx) => {
+    sheetRows.push([
+      idx + 1,
+      r.item.nomorTugas,
+      r.item.nama,
+      r.item.nip || '-',
+      formatPengawasRoomAssignmentLabel(r.assignment),
+      r.jamHadir || '-',
+      r.status || '-',
+      r.catatan || ''
+    ]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+  ws['!cols'] = [
+    { wch: 5 },
+    { wch: 14 },
+    { wch: 32 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 12 },
+    { wch: 18 },
+    { wch: 24 }
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Daftar_Hadir_Pengawas');
+  XLSX.writeFile(
+    wb,
+    `Daftar_Hadir_Pengawas_${params.slot.hari}_${params.slot.sesiLabel.replace(/\s+/g, '')}.xlsx`
+  );
+};
+
+// ================= BERITA ACARA ULANGAN (PSAS) =================
+export const getStoredBeritaAcaraUjian = (): BeritaAcaraUjianRecord[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.BERITA_ACARA_UJIAN);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveStoredBeritaAcaraUjian = (records: BeritaAcaraUjianRecord[]): void => {
+  localStorage.setItem(STORAGE_KEYS.BERITA_ACARA_UJIAN, JSON.stringify(records));
+};
+
+export const exportBeritaAcaraUjianExcel = (records: BeritaAcaraUjianRecord[]): void => {
+  const rows: (string | number)[][] = [
+    ['REKAPITULASI BERITA ACARA PENYELENGGARAAN ULANGAN (PSAS)'],
+    [],
+    [
+      'No',
+      'Nomor Berita Acara',
+      'Nama Ujian',
+      'Hari / Tanggal',
+      'Waktu',
+      'Ruang',
+      'Tingkat / Kelas',
+      'Mata Pelajaran',
+      'Seharusnya',
+      'Hadir',
+      'Tidak Hadir',
+      'Peserta Tidak Hadir',
+      'Kondisi Sampul / CBT',
+      'Pengawas 1',
+      'Pengawas 2',
+      'Catatan Kejadian Khusus'
+    ]
+  ];
+
+  records.forEach((rec, idx) => {
+    const absenText = (rec.siswaTidakHadirList || [])
+      .map(s => `${s.nama} (${s.nomorPeserta || '-'} - ${s.keterangan})`)
+      .join('; ');
+    const sampulLabel =
+      rec.kondisiSampulNaskah === 'baik_tersegel'
+        ? 'Tersegel Utuh & Baik'
+        : rec.kondisiSampulNaskah === 'cbt_lancar'
+        ? 'CBT / Server Lancar'
+        : rec.kondisiSampulNaskah === 'rusak_terbuka'
+        ? 'Sampul Rusak / Terbuka'
+        : 'Lainnya';
+
+    rows.push([
+      idx + 1,
+      rec.nomorBeritaAcara || '-',
+      rec.namaUjian,
+      rec.hariTanggalText || rec.tanggalIso || '-',
+      `${rec.waktuMulai} - ${rec.waktuSelesai}`,
+      rec.ruangUjian || '-',
+      `${rec.tingkatKelas}${rec.kelasRombel ? ` (${rec.kelasRombel})` : ''}`,
+      rec.mataPelajaran || '-',
+      rec.jumlahSeharusnya,
+      rec.jumlahHadir,
+      rec.jumlahTidakHadir,
+      absenText || 'Nihil',
+      sampulLabel,
+      rec.pengawas1Nama || '-',
+      rec.pengawas2Nama || '-',
+      rec.catatanKejadianKhusus || 'Tertib, aman, dan lancar'
+    ]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [
+    { wch: 5 },
+    { wch: 24 },
+    { wch: 30 },
+    { wch: 22 },
+    { wch: 15 },
+    { wch: 10 },
+    { wch: 18 },
+    { wch: 24 },
+    { wch: 11 },
+    { wch: 8 },
+    { wch: 11 },
+    { wch: 36 },
+    { wch: 20 },
+    { wch: 24 },
+    { wch: 24 },
+    { wch: 34 }
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Berita_Acara_PSAS');
+  XLSX.writeFile(wb, `Rekap_Berita_Acara_PSAS_${new Date().toISOString().slice(0, 10)}.xlsx`);
+};
+
+// ================= PRESENSI KEHADIRAN GURU & KARYAWAN (E-PRESENSI BKD) =================
+export const getStoredPresensiConfig = (): PresensiConfig => {
+  const profile = getStoredSchoolProfile();
+  const base = buildDefaultPresensiConfig(profile);
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRESENSI_CONFIG);
+    if (!raw) return base;
+    const parsed = JSON.parse(raw) as Partial<PresensiConfig>;
+    return {
+      ...base,
+      ...parsed,
+      holidays:
+        Array.isArray(parsed.holidays) && parsed.holidays.length > 0
+          ? parsed.holidays
+          : base.holidays
+    };
+  } catch {
+    return base;
+  }
+};
+
+export const saveStoredPresensiConfig = (cfg: PresensiConfig): void => {
+  localStorage.setItem(STORAGE_KEYS.PRESENSI_CONFIG, JSON.stringify(cfg));
+};
+
+export const getStoredPresensiEmployees = (): PresensiEmployeeItem[] => {
+  const guruList = getStoredGuru();
+  const tendikList = getStoredTendik();
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRESENSI_EMPLOYEES);
+    if (!raw) {
+      return buildEmployeesFromGtkMaster(guruList, tendikList);
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0
+      ? parsed
+      : buildEmployeesFromGtkMaster(guruList, tendikList);
+  } catch {
+    return buildEmployeesFromGtkMaster(guruList, tendikList);
+  }
+};
+
+export const saveStoredPresensiEmployees = (list: PresensiEmployeeItem[]): void => {
+  localStorage.setItem(STORAGE_KEYS.PRESENSI_EMPLOYEES, JSON.stringify(list));
+};
+
+export const getStoredPresensiMap = (
+  year = 2026,
+  month = 11
+): Record<string, Record<string, DailyPresensiRecord>> => {
+  const cfg = getStoredPresensiConfig();
+  const employees = getStoredPresensiEmployees();
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRESENSI_MAP);
+    if (!raw) {
+      return seedAttendanceMonthForEmployees({}, employees, cfg, year, month);
+    }
+    const parsed = JSON.parse(raw) as Record<string, Record<string, DailyPresensiRecord>>;
+    return sanitizeHolidaysInAttendanceMap(parsed || {}, cfg.holidays || [], employees, cfg);
+  } catch {
+    return seedAttendanceMonthForEmployees({}, employees, cfg, year, month);
+  }
+};
+
+export const saveStoredPresensiMap = (
+  map: Record<string, Record<string, DailyPresensiRecord>>
+): void => {
+  localStorage.setItem(STORAGE_KEYS.PRESENSI_MAP, JSON.stringify(map));
+};
+
+export const getStoredPresensiBukti = (): PresensiBuktiIzinItem[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRESENSI_BUKTI);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveStoredPresensiBukti = (list: PresensiBuktiIzinItem[]): void => {
+  localStorage.setItem(STORAGE_KEYS.PRESENSI_BUKTI, JSON.stringify(list));
+};
+
+export const getStoredPresensiMonthlyRepo = (): PresensiMonthlyRepoItem[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRESENSI_MONTHLY_REPO);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveStoredPresensiMonthlyRepo = (list: PresensiMonthlyRepoItem[]): void => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PRESENSI_MONTHLY_REPO, JSON.stringify(list));
+  } catch {
+    // Graceful guard when localStorage quota is full; IndexedDB persists unlimited monthly archives
+    try {
+      const compact = list.slice(0, 6);
+      localStorage.setItem(STORAGE_KEYS.PRESENSI_MONTHLY_REPO, JSON.stringify(compact));
+    } catch {
+      // ignore if still exceeding quota
+    }
+  }
 };
 
 export const getStoredUsers = (): User[] => {
@@ -426,7 +1347,16 @@ export const getStoredGuru = (): Guru[] => {
 };
 
 export const saveStoredGuru = (guruList: Guru[]): void => {
-  localStorage.setItem(STORAGE_KEYS.GURU, JSON.stringify(guruList));
+  void upsertGtkPhotosToIdb(guruList.map(g => ({ id: g.id, fotoUrl: g.fotoUrl })));
+  try {
+    localStorage.setItem(STORAGE_KEYS.GURU, JSON.stringify(guruList));
+  } catch {
+    try {
+      localStorage.setItem(STORAGE_KEYS.GURU, JSON.stringify(stripInlineGtkPhotos(guruList)));
+    } catch {
+      // IndexedDB holds inline photos safely
+    }
+  }
 };
 
 export const getStoredTendik = (): Tendik[] => {
@@ -455,7 +1385,41 @@ export const getStoredTendik = (): Tendik[] => {
 };
 
 export const saveStoredTendik = (tendikList: Tendik[]): void => {
-  localStorage.setItem(STORAGE_KEYS.TENDIK, JSON.stringify(tendikList));
+  void upsertGtkPhotosToIdb(tendikList.map(t => ({ id: t.id, fotoUrl: t.fotoUrl })));
+  try {
+    localStorage.setItem(STORAGE_KEYS.TENDIK, JSON.stringify(tendikList));
+  } catch {
+    try {
+      localStorage.setItem(STORAGE_KEYS.TENDIK, JSON.stringify(stripInlineGtkPhotos(tendikList)));
+    } catch {
+      // IndexedDB holds inline photos safely
+    }
+  }
+};
+
+export const hydrateStoredGtkAsync = async (): Promise<{
+  guru?: Guru[];
+  tendik?: Tendik[];
+} | null> => {
+  try {
+    const photoMap = await loadGtkPhotoMapFromIdb();
+    if (!photoMap || Object.keys(photoMap).length === 0) {
+      return null;
+    }
+    const currentGuru = getStoredGuru();
+    const currentTendik = getStoredTendik();
+    const mergedGuru = mergeGtkPhotosFromMap(currentGuru, photoMap);
+    const mergedTendik = mergeGtkPhotosFromMap(currentTendik, photoMap);
+    if (!mergedGuru.changed && !mergedTendik.changed) {
+      return null;
+    }
+    return {
+      guru: mergedGuru.changed ? mergedGuru.list : undefined,
+      tendik: mergedTendik.changed ? mergedTendik.list : undefined
+    };
+  } catch {
+    return null;
+  }
 };
 
 export const getStoredTemplates = (): TemplateSurat[] => {
@@ -512,6 +1476,21 @@ export const generateDatabaseSnapshot = (): DatabaseSnapshot => {
     tendik: getStoredTendik(),
     templates: getStoredTemplates(),
     kartuUjianSettings: getStoredKartuUjianSettings(),
+    jadwalUlanganRepo: getStoredJadwalUlanganRepo(),
+    bukuIndukConfig: getStoredBukuIndukConfig(),
+    bukuIndukKurikulumRepo: getStoredBukuIndukKurikulumRepo(),
+    bukuIndukSiswaMeta: getStoredBukuIndukSiswaMeta(),
+    tempelRuangConfig: getStoredTempelRuangConfig(),
+    strukturOrganisasi: getStoredStrukturOrganisasi(),
+    beritaAcaraUjian: getStoredBeritaAcaraUjian(),
+    presensiPegawai: {
+      employees: getStoredPresensiEmployees(),
+      attendanceMap: getStoredPresensiMap(),
+      config: getStoredPresensiConfig(),
+      buktiList: getStoredPresensiBukti(),
+      monthlyRepo: getStoredPresensiMonthlyRepo()
+    },
+    presensiMonthlyRepo: getStoredPresensiMonthlyRepo(),
     users: getStoredUsers().map(u => ({ ...u, pin: '******' })), // Mask security PIN on export
     auditLogs: getStoredAuditLogs(),
     backupHistory: getStoredBackupHistory()
@@ -3410,6 +4389,29 @@ export const restoreDatabaseFromJson = (
       if (data.schoolProfile) saveStoredSchoolProfile(data.schoolProfile);
       if (data.templates && data.templates.length > 0) saveStoredTemplates(data.templates);
       if (data.kartuUjianSettings) saveStoredKartuUjianSettings(data.kartuUjianSettings);
+      if (data.jadwalUlanganRepo && data.jadwalUlanganRepo.length > 0) {
+        saveStoredJadwalUlanganRepo(data.jadwalUlanganRepo);
+      }
+      if (data.bukuIndukConfig) saveStoredBukuIndukConfig(data.bukuIndukConfig);
+      if (data.bukuIndukKurikulumRepo && data.bukuIndukKurikulumRepo.length > 0) {
+        saveStoredBukuIndukKurikulumRepo(data.bukuIndukKurikulumRepo);
+      }
+      if (data.bukuIndukSiswaMeta) saveStoredBukuIndukSiswaMeta(data.bukuIndukSiswaMeta);
+      if (data.tempelRuangConfig) saveStoredTempelRuangConfig(data.tempelRuangConfig);
+      if (data.strukturOrganisasi) saveStoredStrukturOrganisasi(data.strukturOrganisasi);
+      if (data.beritaAcaraUjian) saveStoredBeritaAcaraUjian(data.beritaAcaraUjian);
+      if (data.presensiPegawai) {
+        if (data.presensiPegawai.config) saveStoredPresensiConfig(data.presensiPegawai.config);
+        if (data.presensiPegawai.employees) saveStoredPresensiEmployees(data.presensiPegawai.employees);
+        if (data.presensiPegawai.attendanceMap) saveStoredPresensiMap(data.presensiPegawai.attendanceMap);
+        if (data.presensiPegawai.buktiList) saveStoredPresensiBukti(data.presensiPegawai.buktiList);
+        if (Array.isArray(data.presensiPegawai.monthlyRepo)) {
+          saveStoredPresensiMonthlyRepo(data.presensiPegawai.monthlyRepo);
+        }
+      }
+      if (Array.isArray(data.presensiMonthlyRepo)) {
+        saveStoredPresensiMonthlyRepo(data.presensiMonthlyRepo);
+      }
       if (data.users && data.users.length > 0) {
         // Keep existing PINs if imported PIN is masked
         const existingUsers = getStoredUsers();
@@ -3455,6 +4457,25 @@ export const restoreDatabaseFromJson = (
       existingTendik.forEach(t => tendikMap.set(t.id, t));
       (data.tendik || []).forEach(t => tendikMap.set(t.id, t));
       finalTendik = Array.from(tendikMap.values());
+
+      if (data.jadwalUlanganRepo && data.jadwalUlanganRepo.length > 0) {
+        const existingRepo = getStoredJadwalUlanganRepo();
+        const repoMap = new Map<string, JadwalUlanganRepoItem>();
+        existingRepo.forEach(r => repoMap.set(r.id, r));
+        data.jadwalUlanganRepo.forEach(r => repoMap.set(r.id, r));
+        saveStoredJadwalUlanganRepo(Array.from(repoMap.values()));
+      }
+      if (data.bukuIndukKurikulumRepo && data.bukuIndukKurikulumRepo.length > 0) {
+        const existingKRepo = getStoredBukuIndukKurikulumRepo();
+        const kRepoMap = new Map<string, BukuIndukKurikulumRepoItem>();
+        existingKRepo.forEach(r => kRepoMap.set(r.id, r));
+        data.bukuIndukKurikulumRepo.forEach(r => kRepoMap.set(r.id, r));
+        saveStoredBukuIndukKurikulumRepo(Array.from(kRepoMap.values()));
+      }
+      if (data.bukuIndukSiswaMeta) {
+        const existingMeta = getStoredBukuIndukSiswaMeta();
+        saveStoredBukuIndukSiswaMeta({ ...existingMeta, ...data.bukuIndukSiswaMeta });
+      }
     }
 
     saveStoredSuratMasuk(finalMasuk);

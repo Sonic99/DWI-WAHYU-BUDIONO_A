@@ -18,7 +18,9 @@ import {
   TemplateSurat,
   KartuUjianSettings,
   PanitiaPengawasItem,
-  KartuPanitiaSettings
+  KartuPanitiaSettings,
+  TempelRuangConfigBundle,
+  StrukturOrganisasiBundle
 } from './types';
 import { 
   getStoredSchoolProfile, 
@@ -49,7 +51,13 @@ import {
   getStoredPanitiaPengawas,
   saveStoredPanitiaPengawas,
   getStoredKartuPanitiaSettings,
-  saveStoredKartuPanitiaSettings
+  saveStoredKartuPanitiaSettings,
+  getStoredTempelRuangConfig,
+  saveStoredTempelRuangConfig,
+  getStoredStrukturOrganisasi,
+  saveStoredStrukturOrganisasi,
+  hydrateStoredStrukturOrganisasiAsync,
+  hydrateStoredGtkAsync
 } from './services/storageService';
 
 import { Header } from './components/Header';
@@ -68,6 +76,16 @@ import { MasterDataView } from './components/MasterDataView';
 import { SuratGeneratorView } from './components/SuratGeneratorView';
 import { KartuUjianView } from './components/KartuUjianView';
 import { KartuPanitiaPengawasView } from './components/KartuPanitiaPengawasView';
+import { SuratIjinMasukUjianView } from './components/SuratIjinMasukUjianView';
+import { BukuIndukSiswaView } from './components/BukuIndukSiswaView';
+import { BukuIndukRaporView } from './components/BukuIndukRaporView';
+import { TempelNomorRuangView } from './components/TempelNomorRuangView';
+import { DaftarHadirUjianView } from './components/DaftarHadirUjianView';
+import { BeritaAcaraUjianView } from './components/BeritaAcaraUjianView';
+import { StrukturOrganisasiView } from './components/StrukturOrganisasiView';
+import { KehadiranPegawaiView } from './components/KehadiranPegawaiView';
+import { KartuMasterGtkView } from './components/KartuMasterGtkView';
+import { DenahRuangView } from './components/DenahRuangView';
 import {
   JadwalPengawasScanPortal,
   resolveScannedProctorFromQuery
@@ -120,17 +138,23 @@ export default function App() {
   const [kartuUjianSettings, setKartuUjianSettings] = useState<KartuUjianSettings>(getStoredKartuUjianSettings);
   const [panitiaPengawasList, setPanitiaPengawasList] = useState<PanitiaPengawasItem[]>(getStoredPanitiaPengawas);
   const [kartuPanitiaSettings, setKartuPanitiaSettings] = useState<KartuPanitiaSettings>(getStoredKartuPanitiaSettings);
+  const [tempelRuangBundle, setTempelRuangBundle] = useState<TempelRuangConfigBundle>(getStoredTempelRuangConfig);
+  const [strukturBundle, setStrukturBundle] = useState<StrukturOrganisasiBundle>(getStoredStrukturOrganisasi);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(getStoredAuditLogs);
   const [backupHistory, setBackupHistory] = useState<BackupRecord[]>(getStoredBackupHistory);
 
   // Pre-selection bridge from Master Data to Letter Generator
   const [letterPreSelection, setLetterPreSelection] = useState<{ type: 'siswa' | 'guru' | 'tendik'; data: Siswa | Guru | Tendik } | null>(null);
+  const [selectedKartuGtkId, setSelectedKartuGtkId] = useState<string | null>(null);
 
   // Modals
   const [disposisiSurat, setDisposisiSurat] = useState<SuratMasuk | null>(null);
   const [printConfig, setPrintConfig] = useState<PrintConfig | null>(null);
   const [isSwitchUserOpen, setIsSwitchUserOpen] = useState(false);
   const [isWebAddressModalOpen, setIsWebAddressModalOpen] = useState(false);
+
+  const hasEditedStrukturRef = React.useRef(false);
+  const hasEditedGtkRef = React.useRef(false);
 
   // Refresh helper
   const reloadAllData = () => {
@@ -146,8 +170,21 @@ export default function App() {
     setKartuUjianSettings(getStoredKartuUjianSettings());
     setPanitiaPengawasList(getStoredPanitiaPengawas());
     setKartuPanitiaSettings(getStoredKartuPanitiaSettings());
+    setTempelRuangBundle(getStoredTempelRuangConfig());
+    setStrukturBundle(getStoredStrukturOrganisasi());
     setAuditLogs(getStoredAuditLogs());
     setBackupHistory(getStoredBackupHistory());
+    void hydrateStoredStrukturOrganisasiAsync().then(hydrated => {
+      if (hydrated && !hasEditedStrukturRef.current) {
+        setStrukturBundle(hydrated);
+      }
+    });
+    void hydrateStoredGtkAsync().then(hydrated => {
+      if (hydrated && !hasEditedGtkRef.current) {
+        if (hydrated.guru) setGuruList(hydrated.guru);
+        if (hydrated.tendik) setTendikList(hydrated.tendik);
+      }
+    });
   };
 
   // Synchronize on load
@@ -299,11 +336,13 @@ export default function App() {
   };
 
   const handleUpdateGuru = (list: Guru[]) => {
+    hasEditedGtkRef.current = true;
     saveStoredGuru(list);
     setGuruList(list);
   };
 
   const handleUpdateTendik = (list: Tendik[]) => {
+    hasEditedGtkRef.current = true;
     saveStoredTendik(list);
     setTendikList(list);
   };
@@ -326,6 +365,17 @@ export default function App() {
   const handleUpdateKartuPanitiaSettings = (settings: KartuPanitiaSettings) => {
     saveStoredKartuPanitiaSettings(settings);
     setKartuPanitiaSettings(settings);
+  };
+
+  const handleUpdateTempelRuangBundle = (nextBundle: TempelRuangConfigBundle) => {
+    saveStoredTempelRuangConfig(nextBundle);
+    setTempelRuangBundle(nextBundle);
+  };
+
+  const handleUpdateStrukturBundle = (nextBundle: StrukturOrganisasiBundle) => {
+    hasEditedStrukturRef.current = true;
+    setStrukturBundle(nextBundle);
+    saveStoredStrukturOrganisasi(nextBundle);
   };
 
   const handleSyncCardTypographyToAll = (typo: CardFontStudioValue) => {
@@ -463,6 +513,56 @@ export default function App() {
           }
         }}
       />
+    );
+  }
+
+  const isStandaloneIjinUjian =
+    typeof window !== 'undefined' &&
+    (() => {
+      const p = new URLSearchParams(window.location.search);
+      const v = (p.get('view') || p.get('tab') || '').toLowerCase();
+      return v === 'izin-ujian' || v === 'ijin-ujian';
+    })();
+
+  if (isStandaloneIjinUjian) {
+    return (
+      <SuratIjinMasukUjianView
+        profile={schoolProfile}
+        currentUser={currentUser}
+        siswaList={siswaList}
+        settings={kartuUjianSettings}
+        panitiaPengawasList={panitiaPengawasList}
+        onUpdateSiswa={handleUpdateSiswa}
+        isStandalone
+      />
+    );
+  }
+
+  const isStandaloneStrukturOrg =
+    typeof window !== 'undefined' &&
+    (() => {
+      const p = new URLSearchParams(window.location.search);
+      const v = (p.get('view') || p.get('tab') || '').toLowerCase();
+      return v === 'struktur-organisasi' || v === 'struktur';
+    })();
+
+  if (isStandaloneStrukturOrg) {
+    return (
+      <div className="min-h-screen bg-slate-100 p-3 sm:p-6 print:bg-white print:p-0">
+        <div className="max-w-7xl mx-auto print:max-w-none print:w-full">
+          <StrukturOrganisasiView
+            profile={schoolProfile}
+            currentUser={currentUser}
+            guruList={guruList}
+            tendikList={tendikList}
+            bundle={strukturBundle}
+            fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+            fallbackStempelUrl={kartuUjianSettings.stempelUrl}
+            isStandalone
+            onUpdateBundle={handleUpdateStrukturBundle}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -673,6 +773,64 @@ export default function App() {
                 onUpdateGuru={handleUpdateGuru}
                 onUpdateTendik={handleUpdateTendik}
                 onSelectForLetter={handleSelectForLetter}
+                onOpenProfileCard={(gtkId) => {
+                  setSelectedKartuGtkId(gtkId);
+                  setCurrentTab('kartu-gtk');
+                }}
+              />
+            )}
+
+            {/* View: Kartu Master Data & Profil Guru dan Tendik */}
+            {currentTab === 'kartu-gtk' && (
+              <KartuMasterGtkView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                guruList={guruList}
+                tendikList={tendikList}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
+                initialSelectedGtkId={selectedKartuGtkId}
+                onUpdateGuru={handleUpdateGuru}
+                onUpdateTendik={handleUpdateTendik}
+                onSelectForLetter={handleSelectForLetter}
+              />
+            )}
+
+            {/* View: Struktur Organisasi Sekolah & Aturan Urutan */}
+            {currentTab === 'struktur-organisasi' && (
+              <StrukturOrganisasiView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                guruList={guruList}
+                tendikList={tendikList}
+                bundle={strukturBundle}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
+                onUpdateBundle={handleUpdateStrukturBundle}
+              />
+            )}
+
+            {/* View: Buku Induk Siswa & Repositori Kurikulum */}
+            {currentTab === 'buku-induk' && (
+              <BukuIndukSiswaView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
+                onUpdateSiswa={handleUpdateSiswa}
+              />
+            )}
+
+            {/* View: Detail Nilai Rapor Buku Induk Per Semester */}
+            {currentTab === 'buku-induk-rapor' && (
+              <BukuIndukRaporView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                guruList={guruList}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
               />
             )}
 
@@ -705,6 +863,83 @@ export default function App() {
                 onUpdateSettings={handleUpdateKartuPanitiaSettings}
                 onSyncTypographyToAllCards={handleSyncCardTypographyToAll}
                 onSyncDimensionsToAllCards={handleSyncCardDimensionsToAll}
+              />
+            )}
+
+            {/* View: Surat Ijin Masuk Ujian (siswa terlambat) */}
+            {currentTab === 'izin-ujian' && (
+              <SuratIjinMasukUjianView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                settings={kartuUjianSettings}
+                panitiaPengawasList={panitiaPengawasList}
+                onUpdateSiswa={handleUpdateSiswa}
+              />
+            )}
+
+            {/* View: Setting Tempel Nomor Ruang Ujian per Kelompok Tingkat */}
+            {currentTab === 'tempel-ruang' && (
+              <TempelNomorRuangView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                ujianSettings={kartuUjianSettings}
+                bundle={tempelRuangBundle}
+                onUpdateBundle={handleUpdateTempelRuangBundle}
+                onUpdateSiswa={handleUpdateSiswa}
+                onUpdateUjianSettings={handleUpdateKartuUjianSettings}
+              />
+            )}
+
+            {/* View: Denah Ruang Kelas & Ujian SMAN 9 Surabaya */}
+            {currentTab === 'denah-ruang' && (
+              <DenahRuangView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                ujianSettings={kartuUjianSettings}
+                panitiaList={panitiaPengawasList}
+              />
+            )}
+
+            {/* View: Daftar Hadir Ulangan Siswa & Pengawas Ruang */}
+            {currentTab === 'daftar-hadir-ujian' && (
+              <DaftarHadirUjianView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                ujianSettings={kartuUjianSettings}
+                panitiaList={panitiaPengawasList}
+                panitiaSettings={kartuPanitiaSettings}
+                onUpdateSiswa={handleUpdateSiswa}
+              />
+            )}
+
+            {/* View: Berita Acara Ulangan PSAS (Form Kosongan & Form Isian) */}
+            {currentTab === 'berita-acara-ujian' && (
+              <BeritaAcaraUjianView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                siswaList={siswaList}
+                guruList={guruList}
+                ujianSettings={kartuUjianSettings}
+                panitiaList={panitiaPengawasList}
+                panitiaSettings={kartuPanitiaSettings}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
+              />
+            )}
+
+            {/* View: Kehadiran Guru & Karyawan (E-Presensi BKD) */}
+            {currentTab === 'kehadiran-pegawai' && (
+              <KehadiranPegawaiView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                guruList={guruList}
+                tendikList={tendikList}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
               />
             )}
 

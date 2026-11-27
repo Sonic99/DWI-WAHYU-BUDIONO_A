@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 6mm 8mm;
+  }
+  
+  *, *::before, *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    box-sizing: border-box !important;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 7.5pt !important;
+    font-family: 'Times New Roman', Times, 'Liberation Serif', serif !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1.25 !important;
+  }
+
+  header, nav, main, .print\:hidden, .no-print, button, input[type="range"], select {
+    display: none !important;
+  }
+
+  /* Reset modal overlay when printing */
+  body:has(#printable-official-report) #printable-official-report,
+  body:has(#printable-individual-sheet) #printable-individual-sheet {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .fixed {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  /* KOP surat & signature tables must NEVER have borders */
+  .kop-table, .signature-table, table.border-none {
+    border: none !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+  }
+  .kop-table td, .signature-table td, table.border-none td {
+    border: none !important;
+    background: transparent !important;
+  }
+
+  /* Data tables have crisp official borders and FIXED layout */
+  table.official-data-table, table.data-table {
+    page-break-inside: auto;
+    border-collapse: collapse !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+  }
+
+  table.official-data-table tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  table.official-data-table thead {
+    display: table-header-group;
+  }
+
+  table.official-data-table tfoot {
+    display: table-footer-group;
+  }
+
+  table.official-data-table th, 
+  table.official-data-table td {
+    border: 0.75pt solid #000000 !important;
+    color: #000000 !important;
+    padding: 2px 2px !important;
+    vertical-align: middle !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+  }
+
+  table.official-data-table th {
+    background-color: #f0f2f5 !important;
+    font-weight: 700 !important;
+    text-align: center !important;
+    line-height: 1.15 !important;
+  }
+
+  .kop-double-divider {
+    border-bottom: 3.5px double #000000 !important;
+  }
+
+  .break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .summary-info-box, .legend-box {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}

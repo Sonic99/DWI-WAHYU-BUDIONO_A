@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#064e3b" />
+      <stop offset="50%" stop-color="#047857" />
+      <stop offset="100%" stop-color="#0f766e" />
+    </linearGradient>
+    <linearGradient id="goldGradMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="50%" stop-color="#eab308" />
+      <stop offset="100%" stop-color="#ca8a04" />
+    </linearGradient>
+  </defs>
+
+  <!-- Full background bleed for Android maskable circles/squircles -->
+  <rect width="512" height="512" fill="url(#bgGradMask)" />
+
+  <!-- Safe-zone centered emblem (within 80% circle) -->
+  <g transform="translate(51.2, 51.2) scale(0.8)">
+    <rect x="106" y="126" width="300" height="270" rx="36" fill="#ffffff" />
+    <path d="M 106 162 C 106 142 122 126 142 126 L 370 126 C 390 126 406 142 406 162 L 406 206 L 106 206 Z" fill="#047857" />
+    <rect x="160" y="96" width="24" height="56" rx="12" fill="url(#goldGradMask)" />
+    <rect x="328" y="96" width="24" height="56" rx="12" fill="url(#goldGradMask)" />
+    
+    <circle cx="256" cy="300" r="64" fill="#ecfdf5" stroke="#10b981" stroke-width="6" />
+    <path d="M 226 300 L 246 322 L 290 274" fill="none" stroke="#047857" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+
+    <text x="256" y="445" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="4">E-PRESENSI</text>
+  </g>
+</svg>
