@@ -33,8 +33,10 @@ import {
   DailyPresensiRecord,
   PresensiConfig,
   PresensiBuktiIzinItem,
-  PresensiMonthlyRepoItem
+  PresensiMonthlyRepoItem,
+  SkpDocumentRecord
 } from '../types';
+import { createInitialSkpRecords } from '../utils/skpPresets';
 import {
   INITIAL_KURIKULUM_REPO_SEEDS,
   INITIAL_BUKU_INDUK_CONFIG,
@@ -124,6 +126,7 @@ const STORAGE_KEYS = {
   PRESENSI_MONTHLY_REPO: 'sip_tu_presensi_monthly_repo_v1',
   PANITIA_PENGAWAS: 'sip_tu_panitia_pengawas_v1',
   KARTU_PANITIA_SETTINGS: 'sip_tu_kartu_panitia_settings_v1',
+  SKP_RECORDS: 'sip_tu_skp_records_v1'
 };
 
 // Safe retrieval helpers
@@ -1491,6 +1494,7 @@ export const generateDatabaseSnapshot = (): DatabaseSnapshot => {
       monthlyRepo: getStoredPresensiMonthlyRepo()
     },
     presensiMonthlyRepo: getStoredPresensiMonthlyRepo(),
+    skpRecords: getStoredSkpRecords(),
     users: getStoredUsers().map(u => ({ ...u, pin: '******' })), // Mask security PIN on export
     auditLogs: getStoredAuditLogs(),
     backupHistory: getStoredBackupHistory()
@@ -4412,6 +4416,9 @@ export const restoreDatabaseFromJson = (
       if (Array.isArray(data.presensiMonthlyRepo)) {
         saveStoredPresensiMonthlyRepo(data.presensiMonthlyRepo);
       }
+      if (Array.isArray(data.skpRecords)) {
+        saveStoredSkpRecords(data.skpRecords);
+      }
       if (data.users && data.users.length > 0) {
         // Keep existing PINs if imported PIN is masked
         const existingUsers = getStoredUsers();
@@ -5383,4 +5390,48 @@ export const parseExcelMatriksJadwalPengawas = (
     };
   }
 };
+
+export const getStoredSkpRecords = (): SkpDocumentRecord[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.SKP_RECORDS);
+    if (!raw) {
+      const seeded = createInitialSkpRecords(
+        getStoredSchoolProfile(),
+        getStoredGuru(),
+        getStoredTendik()
+      );
+      localStorage.setItem(STORAGE_KEYS.SKP_RECORDS, JSON.stringify(seeded));
+      return seeded;
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveStoredSkpRecords = (records: SkpDocumentRecord[]): void => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.SKP_RECORDS, JSON.stringify(records));
+  } catch {
+    // Fallback if quota tight: strip large inline data URLs if any
+    try {
+      const compact = records.map(r => ({
+        ...r,
+        rhkList: r.rhkList.map(rhk => ({
+          ...rhk,
+          buktiDukungList: rhk.buktiDukungList.map(b => ({
+            ...b,
+            inlinePreviewDataUrl:
+              b.inlinePreviewDataUrl && b.inlinePreviewDataUrl.length > 64000
+                ? undefined
+                : b.inlinePreviewDataUrl
+          }))
+        }))
+      }));
+      localStorage.setItem(STORAGE_KEYS.SKP_RECORDS, JSON.stringify(compact));
+    } catch {}
+  }
+};
+
 

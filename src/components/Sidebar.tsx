@@ -30,7 +30,8 @@ import {
   ScrollText,
   CalendarCheck,
   Contact2,
-  MapPin
+  MapPin,
+  Award
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -123,6 +124,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       shortLabel: 'Presensi GTK',
       icon: CalendarCheck,
       badgeFull: 'E-Presensi BKD',
+      roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
+    },
+    {
+      id: 'skp-pegawai',
+      label: 'SKP & Pembaca Bukti Dukung',
+      shortLabel: 'SKP & Bukti',
+      icon: Award,
+      badgeFull: 'e-Kinerja & Reader',
       roles: ['admin_tu', 'staf_agenda', 'kepala_sekolah', 'wakasek', 'guru_staf'] as UserRole[]
     },
     {

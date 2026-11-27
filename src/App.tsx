@@ -86,6 +86,7 @@ import { StrukturOrganisasiView } from './components/StrukturOrganisasiView';
 import { KehadiranPegawaiView } from './components/KehadiranPegawaiView';
 import { KartuMasterGtkView } from './components/KartuMasterGtkView';
 import { DenahRuangView } from './components/DenahRuangView';
+import { SkpPegawaiView } from './components/SkpPegawaiView';
 import {
   JadwalPengawasScanPortal,
   resolveScannedProctorFromQuery
@@ -934,6 +935,18 @@ export default function App() {
             {/* View: Kehadiran Guru & Karyawan (E-Presensi BKD) */}
             {currentTab === 'kehadiran-pegawai' && (
               <KehadiranPegawaiView
+                profile={schoolProfile}
+                currentUser={currentUser}
+                guruList={guruList}
+                tendikList={tendikList}
+                fallbackTtdKsUrl={kartuUjianSettings.ttdKsUrl}
+                fallbackStempelUrl={kartuUjianSettings.stempelUrl}
+              />
+            )}
+
+            {/* View: SKP & Pembaca Bukti Dukung */}
+            {currentTab === 'skp-pegawai' && (
+              <SkpPegawaiView
                 profile={schoolProfile}
                 currentUser={currentUser}
                 guruList={guruList}

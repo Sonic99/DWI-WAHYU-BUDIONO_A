@@ -1145,6 +1145,101 @@ export interface PresensiMonthlyRepoItem {
   hasRawExcelFile?: boolean;
 }
 
+export type SkpStatusVerifikasi = 'Belum Diperiksa' | 'Terbaca & Valid' | 'Perlu Perbaikan';
+
+export type SkpBuktiFileType = 'pdf' | 'image' | 'excel' | 'text' | 'link';
+
+export type SkpBuktiKategori =
+  | 'SK / Surat Tugas'
+  | 'Perangkat Ajar / Modul'
+  | 'Laporan Kegiatan'
+  | 'Daftar Hadir / Rekap'
+  | 'Sertifikat / Piagam'
+  | 'Dokumentasi Foto'
+  | 'Tautan Drive / e-Kinerja'
+  | 'Lainnya';
+
+export interface SkpBuktiDukungItem {
+  id: string;
+  judul: string;
+  ringkasanIsi: string;
+  kategori: SkpBuktiKategori;
+  nomorDokumen?: string;
+  tanggalDokumen: string;
+  jenisFile: SkpBuktiFileType;
+  fileName?: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  externalUrl?: string;
+  teksNarasi?: string;
+  statusVerifikasi: SkpStatusVerifikasi;
+  catatanPenilai?: string;
+  hasBinaryBlob?: boolean;
+  inlinePreviewDataUrl?: string;
+  uploadedAt: string;
+}
+
+export interface SkpIndikatorKinerja {
+  id: string;
+  aspek: 'Kuantitas' | 'Kualitas' | 'Waktu' | 'Biaya';
+  indikator: string;
+  target: string;
+  realisasi: string;
+  capaianPersen: number;
+  umpanBalik?: string;
+}
+
+export interface SkpRhkItem {
+  id: string;
+  jenis: 'Utama' | 'Tambahan';
+  rhkAtasan: string;
+  rencanaHasilKerja: string;
+  periodeLabel: string;
+  indikatorList: SkpIndikatorKinerja[];
+  buktiDukungList: SkpBuktiDukungItem[];
+}
+
+export interface SkpPerilakuItem {
+  aspek: string;
+  ekspektasiKhusus: string;
+  umpanBalik: string;
+}
+
+export type SkpRatingLevel = 'Diatas Ekspektasi' | 'Sesuai Ekspektasi' | 'Dibawah Ekspektasi';
+
+export type SkpPredikatKinerja =
+  | 'Sangat Baik'
+  | 'Baik'
+  | 'Butuh Perbaikan'
+  | 'Kurang'
+  | 'Sangat Kurang';
+
+export interface SkpDocumentRecord {
+  id: string;
+  pegawaiSourceType: 'guru' | 'tendik' | 'manual';
+  pegawaiSourceId?: string;
+  pegawaiNama: string;
+  pegawaiNip: string;
+  pegawaiPangkatGol: string;
+  pegawaiJabatan: string;
+  pegawaiUnitKerja: string;
+  penilaiNama: string;
+  penilaiNip: string;
+  penilaiPangkatGol: string;
+  penilaiJabatan: string;
+  penilaiUnitKerja: string;
+  tahun: number;
+  periode: string;
+  pendekatan: 'Kuantitatif' | 'Kualitatif';
+  ratingHasilKerja: SkpRatingLevel;
+  ratingPerilaku: SkpRatingLevel;
+  predikatKinerja: SkpPredikatKinerja;
+  rhkList: SkpRhkItem[];
+  perilakuList: SkpPerilakuItem[];
+  catatanEvaluasi?: string;
+  updatedAt: string;
+}
+
 export interface DatabaseSnapshot {
   version: string;
   exportedAt: string;
@@ -1176,6 +1271,7 @@ export interface DatabaseSnapshot {
   presensiMonthlyRepo?: PresensiMonthlyRepoItem[];
   panitiaPengawas?: PanitiaPengawasItem[];
   kartuPanitiaSettings?: KartuPanitiaSettings;
+  skpRecords?: SkpDocumentRecord[];
   auditLogs: AuditLog[];
   backupHistory: BackupRecord[];
 }
